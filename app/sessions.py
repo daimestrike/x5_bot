@@ -17,7 +17,8 @@ class Session:
     started_at: float
     last_seen: float
     screen: str = "S0"
-    section: Optional[str] = None
+    type: Optional[str] = None
+    group: Optional[str] = None
     page: int = 0
     card_id: Optional[str] = None
     awaiting_search: bool = False

@@ -16,9 +16,10 @@ def main() -> int:
     except ContentError as e:
         print(e)
         return 1
-    print(f"OK: {len(c.cards)} карточек, {len(c.sections)} разделов, {len(c.help_routes)} маршрутов помощи")
-    for s in c.sections:
-        print(f"  {s.title}: {len(s.cards)}")
+    total = sum(len(v) for v in c.all_versions.values())
+    print(f"OK: опубликовано {len(c.cards)} материалов (всего записей {total}), {len(c.help_routes)} маршрутов помощи")
+    for t in c.types:
+        print(f"  {t.title}: {len(c.cards_of_type(t.id))}")
     if c.warnings:
         print("Предупреждения:")
         for w in c.warnings:

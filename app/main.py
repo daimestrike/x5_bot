@@ -16,7 +16,7 @@ from .config import Settings, load_settings
 from .content import ContentError, load_content
 from .engine import Engine
 from .journal import COLUMNS, Journal
-from .metrics import summary
+from .metrics import appeals_table, summary
 from .models import Incoming
 from .sessions import SessionStore
 from .transports.rooms import RoomsClient, parse_update
@@ -57,6 +57,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.get("/health")
     async def health() -> Dict[str, Any]:
         return {"status": "ok", "version": __version__, "cards": len(content.cards),
+                "search_enabled": settings.search_enabled,
                 "rooms_configured": rooms.configured, "content_warnings": len(content.warnings)}
 
     # ------------------------------------------------------------ webhook Rooms
@@ -130,12 +131,27 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             w.writerow([r[c] for c in COLUMNS])
         return PlainTextResponse(buf.getvalue(), media_type="text/csv; charset=utf-8")
 
+    @app.get("/metrics/appeals.csv", dependencies=[Depends(_check_metrics_token)])
+    async def appeals_csv(since: Optional[str] = None, until: Optional[str] = None) -> PlainTextResponse:
+        """Обращения для ручной привязки к ПИ: участник, сеанс, время, тема, версия, итоговая оценка, помощь."""
+        cols = ["user_ref", "session_id", "first_ts", "last_ts", "card_id", "card_version", "views", "final_rating", "help"]
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";")
+        w.writerow(cols)
+        for t in appeals_table(journal, since, until):
+            w.writerow([t[c] for c in cols])
+        return PlainTextResponse(buf.getvalue(), media_type="text/csv; charset=utf-8")
+
     @app.get("/content/cards")
     async def cards_list() -> Dict[str, Any]:
+        """Реестр: опубликованные материалы по типам + все версии (черновики и снятые) для разбора."""
         return {
-            "sections": [{"id": s.id, "title": s.title, "cards": [
-                {"id": c.id, "title": c.title, "version": c.version, "updated": c.updated, "owner": c.owner,
-                 "link": content.link_for(c)} for c in s.cards]} for s in content.sections],
+            "types": [{"id": t.id, "title": t.title, "cards": [
+                {"id": c.id, "title": c.title, "group": c.group, "version": c.version, "checked": c.checked,
+                 "owner": c.owner, "reviewer": c.reviewer, "link": content.link_for(c)}
+                for c in content.cards_of_type(t.id)]} for t in content.types],
+            "versions": {cid: [{"version": c.version, "status": c.status} for c in vs]
+                         for cid, vs in content.all_versions.items()},
             "warnings": content.warnings,
         }
 

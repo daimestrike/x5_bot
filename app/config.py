@@ -21,6 +21,8 @@ class Settings:
     log_free_text: bool = _env_bool("LOG_FREE_TEXT", True)
     free_text_max_len: int = int(os.getenv("FREE_TEXT_MAX_LEN", "200"))
     content_strict: bool = _env_bool("CONTENT_STRICT", True)
+    search_enabled: bool = _env_bool("SEARCH_ENABLED", False)          # v11: по умолчанию только меню
+    journal_user_mode: str = os.getenv("JOURNAL_USER_MODE", "plain")     # plain — участник как есть; hash — хеш
 
     # Транспорт Rooms
     rooms_api_base_url: str = os.getenv("ROOMS_API_BASE_URL", "")

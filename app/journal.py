@@ -1,4 +1,7 @@
-"""Журнал обращений (SQLite). Персональные данные не хранятся: пользователь — солёный хеш."""
+"""Журнал обращений (SQLite): тема, время, версия, оценка, выбор помощи, участник и сеанс (MVP v11, п. 6).
+
+user_ref — идентификатор участника из Rooms как есть (JOURNAL_USER_MODE=plain, нужен для ручной привязки
+сеанса к ПИ) либо солёный хеш (JOURNAL_USER_MODE=hash). Содержание ПИ в журнал не попадает."""
 from __future__ import annotations
 
 import datetime as dt
@@ -14,7 +17,7 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
     session_id TEXT NOT NULL,
-    user_hash TEXT NOT NULL,
+    user_ref TEXT NOT NULL,
     event TEXT NOT NULL,
     card_id TEXT,
     card_version TEXT,
@@ -29,7 +32,7 @@ CREATE INDEX IF NOT EXISTS ix_events_event ON events(event);
 CREATE INDEX IF NOT EXISTS ix_events_session ON events(session_id);
 """
 
-COLUMNS = ["ts", "session_id", "user_hash", "event", "card_id", "card_version", "rating", "reason", "query",
+COLUMNS = ["ts", "session_id", "user_ref", "event", "card_id", "card_version", "rating", "reason", "query",
            "help_type", "extra"]
 
 # Типы событий журнала
@@ -40,7 +43,7 @@ CLARIFY = "clarify"                # причина «Не помогло»
 SEARCH = "search"                  # запрос с результатом
 SEARCH_MISS = "search_miss"        # запрос без результата — пробел базы
 HELP_REQUEST = "help_request"      # обращение к маршруту помощи
-UNRECOGNIZED = "unrecognized"      # свободный текст (S7)
+QUESTION = "question"              # свободный текст (S7) — вопрос без ответа для ответственного за содержание
 ATTACHMENT = "attachment"          # голосовое / фото / файл
 THANKS = "thanks"                  # «спасибо» — не обращение
 MATERIAL_ERROR = "material_error"  # сбой выдачи (S8)
@@ -62,15 +65,15 @@ class Journal:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
 
-    def log(self, event: str, session_id: str, user_hash_: str, *, card_id: Optional[str] = None,
+    def log(self, event: str, session_id: str, user_ref: str, *, card_id: Optional[str] = None,
             card_version: Optional[str] = None, rating: Optional[str] = None, reason: Optional[str] = None,
             query: Optional[str] = None, help_type: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None:
         ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         with self._lock:
             self._conn.execute(
-                "INSERT INTO events (ts, session_id, user_hash, event, card_id, card_version,"
+                "INSERT INTO events (ts, session_id, user_ref, event, card_id, card_version,"
                 " rating, reason, query, help_type, extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (ts, session_id, user_hash_, event, card_id, card_version, rating, reason, query, help_type,
+                (ts, session_id, user_ref, event, card_id, card_version, rating, reason, query, help_type,
                  json.dumps(extra, ensure_ascii=False) if extra else None),
             )
             self._conn.commit()

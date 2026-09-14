@@ -1,9 +1,13 @@
-"""Диалоговый движок: экраны S0–S8 и переходы между ними (лист «Экраны и кнопки»).
+"""Диалоговый движок (MVP v11): меню -> раздел (тип материала) -> тема -> материал; оценка; помощь.
 
 Не зависит от мессенджера: на вход Incoming, на выход Reply с текстами и кнопками.
 Callback-данные кнопок:
-    menu | back | search | help | help:<pi|tech|org>
-    sec:<A-E>:<page> | card:<ID> | ok:<ID> | no:<ID> | why:<notfound|details|failed>:<ID>
+    menu | search | help | help:<pi|tech|org>
+    type:<answer|instruction|checklist>            список тем или разделов типа
+    type:<tid>:<group>:<page>                      список тем раздела внутри типа
+    card:<ID> | ok:<ID> | no:<ID>
+Правила v11: бот показывает только опубликованные материалы; повтор темы в сеансе — то же обращение;
+последняя оценка — итоговая; свободный текст не разбирается по смыслу, а записывается для ответственного.
 """
 from __future__ import annotations
 
@@ -21,7 +25,6 @@ from .sessions import Session, SessionStore
 log = logging.getLogger(__name__)
 
 TOPICS_PER_PAGE = 8
-REASONS = {"notfound": "why_notfound", "details": "why_details", "failed": "why_failed"}
 MENU_COMMANDS = {"/start", "start", "старт", "/menu", "меню", "menu", "начать"}
 
 
@@ -35,24 +38,19 @@ class Engine:
     # ------------------------------------------------------------------ public
     def handle(self, inc: Incoming) -> Reply:
         session, is_new = self.sessions.get_or_create(inc.user_id)
-        uh = J.user_hash(inc.user_id, self.settings.journal_salt)
+        uh = self._user_ref(inc.user_id)
         reply = Reply()
         if is_new:
             self.journal.log(J.SESSION_START, session.id, uh)
-            reply.messages.append(self._s0())
+            reply.messages.append(Message(self.t("S0")))
             reply.screen = "S0"
-
         try:
             action = self._resolve_action(session, inc)
             if action is None:
-                if is_new:
-                    # первое открытие чата без ввода — достаточно приветствия
-                    self._remember(session, reply)
-                    return reply
-                action = "menu"
-            self._dispatch(action, session, inc, uh, reply)
+                action = "menu"  # открытие бота = главное меню (v11 «Логика ответов»)
+            self._dispatch(action, session, uh, reply)
         except Exception:  # noqa: BLE001 — любой сбой выдачи -> S8, ПИ не останавливается
-            log.exception("material error for user session %s", session.id)
+            log.exception("material error, session %s", session.id)
             self.journal.log(J.MATERIAL_ERROR, session.id, uh, card_id=session.card_id)
             reply.messages.append(self._s8(session))
             reply.screen = "S8"
@@ -61,7 +59,6 @@ class Engine:
 
     # ------------------------------------------------------------- resolution
     def _resolve_action(self, session: Session, inc: Incoming) -> Optional[str]:
-        """Превращает вход (кнопка / текст / вложение) в действие движка."""
         if inc.callback:
             return inc.callback.strip()
         if inc.attachment_type and not (inc.text or "").strip():
@@ -72,45 +69,39 @@ class Engine:
         low = normalize(text)
         if low in MENU_COMMANDS:
             return "menu"
-        # ответ номером кнопки: «2» -> вторая из последних показанных кнопок
-        if re.fullmatch(r"\d{1,2}", low):
+        if re.fullmatch(r"\d{1,2}", low):  # ответ номером кнопки
             idx = int(low) - 1
             if 0 <= idx < len(session.last_buttons):
                 return session.last_buttons[idx].data
-        # ответ подписью кнопки
-        for b in session.last_buttons:
+        for b in session.last_buttons:  # ответ подписью кнопки
             if normalize(b.label) == low:
                 return b.data
         for key, label in self.content.labels.items():
             if normalize(label) == low:
-                return {"menu": "menu", "search": "search", "help": "help", "back": "menu"}.get(key, "menu")
+                return {"search": "search", "help": "help"}.get(key, "menu")
         if low in self.content.thanks_words:
             return "thanks"
-        if session.awaiting_search or is_search_query(text):
+        if self.settings.search_enabled and (session.awaiting_search or is_search_query(text)):
             return f"query:{text}"
         return f"free:{text}"
 
-    def _dispatch(self, action: str, s: Session, inc: Incoming, uh: str, reply: Reply) -> None:
-        parts = action.split(":", 2)
+    def _dispatch(self, action: str, s: Session, uh: str, reply: Reply) -> None:
+        parts = action.split(":")
         kind = parts[0]
         s.awaiting_search = False
 
         if kind in ("menu", "back"):
             self._goto_menu(s, reply)
-        elif kind == "sec" and len(parts) >= 2:
-            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
-            self._show_section(s, parts[1], page, reply)
+        elif kind == "type" and len(parts) >= 2:
+            group = parts[2] if len(parts) > 2 and parts[2] else None
+            page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            self._show_type(s, parts[1], group, page, reply)
         elif kind == "card" and len(parts) >= 2:
             self._show_card(s, parts[1], uh, reply)
-        elif kind == "ok" and len(parts) >= 2:
-            self._rate(s, parts[1], "helped", uh, reply)
-        elif kind == "no" and len(parts) >= 2:
-            self._rate(s, parts[1], "not_helped", uh, reply)
-        elif kind == "why" and len(parts) >= 3:
-            self._clarify(s, parts[2], parts[1], uh, reply)
-        elif kind == "search":
-            s.screen = "S5"
-            s.awaiting_search = True
+        elif kind in ("ok", "no") and len(parts) >= 2:
+            self._rate(s, parts[1], "helped" if kind == "ok" else "not_helped", uh, reply)
+        elif kind == "search" and self.settings.search_enabled:
+            s.screen, s.awaiting_search = "S5", True
             reply.messages.append(Message(self.t("S5"), [[self.btn("menu", "menu")]]))
             reply.screen = "S5"
         elif kind == "query":
@@ -130,70 +121,100 @@ class Engine:
         elif kind == "free":
             self._unrecognized(s, uh, reply, phrase=action.split(":", 1)[1])
         else:
-            # неизвестный callback (устаревшая кнопка) — возвращаем в меню
-            self._goto_menu(s, reply)
+            self._goto_menu(s, reply)  # неизвестная/устаревшая кнопка
 
     # ---------------------------------------------------------------- screens
-    def _s0(self) -> Message:
-        return Message(self.t("S0"), [[self.btn("menu", "menu")]])
-
     def _goto_menu(self, s: Session, reply: Reply) -> None:
-        s.screen, s.section, s.page, s.card_id = "S1", None, 0, None
-        rows: List[List[Button]] = [[Button(sec.title.split(". ", 1)[-1], f"sec:{sec.id}:0")] for sec in self.content.sections]
-        rows.append([self.btn("search", "search"), self.btn("help", "help")])
+        s.screen, s.type, s.group, s.page, s.card_id = "S1", None, None, 0, None
+        rows: List[List[Button]] = [[Button(t.title, f"type:{t.id}")] for t in self.content.types]
+        last = [self.btn("help", "help")]
+        if self.settings.search_enabled:
+            last.insert(0, self.btn("search", "search"))
+        rows.append(last)
         reply.messages.append(Message(self.t("S1"), rows))
         reply.screen = "S1"
 
-    def _show_section(self, s: Session, sid: str, page: int, reply: Reply) -> None:
-        section = self.content.section(sid)
-        if section is None:
+    def _show_type(self, s: Session, tid: str, group: Optional[str], page: int, reply: Reply) -> None:
+        title = self.content.type_title(tid)
+        if title is None:
             self._goto_menu(s, reply)
             return
-        pages = max(1, (len(section.cards) + TOPICS_PER_PAGE - 1) // TOPICS_PER_PAGE)
+        cards = self.content.cards_of_type(tid)
+        groups = self.content.groups_of_type(tid)
+        # Больше одной страницы тем -> сначала разделы, чтобы до любой темы было <= 3 нажатий
+        if group is None and len(cards) > TOPICS_PER_PAGE and len(groups) > 1:
+            s.screen, s.type, s.group, s.page, s.card_id = "S2", tid, None, 0, None
+            rows = [[Button(g.title, f"type:{tid}:{g.id}:0")] for g in groups]
+            rows.append([self.btn("back", "menu")])
+            reply.messages.append(Message(self.t("S2_groups", section=title), rows))
+            reply.screen = "S2"
+            return
+        if group is not None:
+            cards = [c for c in cards if c.group == group]
+            gtitle = self.content.group_title(group)
+            title = f"{title} — {gtitle}" if gtitle else title
+        pages = max(1, (len(cards) + TOPICS_PER_PAGE - 1) // TOPICS_PER_PAGE)
         page = max(0, min(page, pages - 1))
-        s.screen, s.section, s.page, s.card_id = "S2", sid, page, None
-        chunk = section.cards[page * TOPICS_PER_PAGE:(page + 1) * TOPICS_PER_PAGE]
+        s.screen, s.type, s.group, s.page, s.card_id = "S2", tid, group, page, None
+        chunk = cards[page * TOPICS_PER_PAGE:(page + 1) * TOPICS_PER_PAGE]
         rows = [[Button(c.title, f"card:{c.id}")] for c in chunk]
         nav: List[Button] = []
         if pages > 1:
-            nav.append(self.btn("more_topics", f"sec:{sid}:{(page + 1) % pages}"))
-        nav.append(self.btn("back", "menu"))
+            nav.append(self.btn("more_topics", f"type:{tid}:{group or ''}:{(page + 1) % pages}"))
+        nav.append(self.btn("back", f"type:{tid}" if group is not None and len(groups) > 1 else "menu"))
+        nav.append(self.btn("menu", "menu"))
         rows.append(nav)
-        title = section.title.split(". ", 1)[-1]
         reply.messages.append(Message(self.t("S2", section=title), rows))
         reply.screen = "S2"
 
     def _show_card(self, s: Session, cid: str, uh: str, reply: Reply) -> None:
         card = self.content.cards.get(cid)
-        if card is None:
-            raise KeyError(f"card {cid} not found")
-        s.screen, s.section, s.card_id = "S3", card.section, cid
-        self.journal.log(J.CARD_VIEW, s.id, uh, card_id=cid, card_version=card.version)
+        if card is None:  # черновик, снятая версия или неизвестный id — материал не выдаём
+            raise KeyError(f"card {cid} is not published")
+        s.screen, s.type, s.group, s.card_id = "S3", card.type, card.group, cid
+        self.journal.log(J.CARD_VIEW, s.id, uh, card_id=cid, card_version=card.version,
+                         extra={"type": card.type})
         reply.messages.append(Message(self.render_card(card), self._card_buttons(card)))
         reply.screen = "S3"
 
     def _card_buttons(self, card: Card) -> List[List[Button]]:
         return [
             [self.btn("helped", f"ok:{card.id}"), self.btn("not_helped", f"no:{card.id}")],
-            [self.btn("other_topics", f"sec:{card.section}:0"), self.btn("menu", "menu")],
+            [self.btn("other_topics", self._topics_data(card)), self.btn("menu", "menu")],
         ]
 
+    def _topics_data(self, card: Card) -> str:
+        cards = self.content.cards_of_type(card.type)
+        if len(cards) > TOPICS_PER_PAGE and len(self.content.groups_of_type(card.type)) > 1:
+            return f"type:{card.type}:{card.group}:0"
+        return f"type:{card.type}"
+
     def render_card(self, card: Card) -> str:
-        steps = self.content.render_steps(card)
         lines = [card.title]
+        if card.type == "checklist":
+            if card.when:
+                lines.append(self.t("S3_when", when=card.when))
+            if card.prepare:
+                lines.append(self.t("S3_prepare", prepare=card.prepare))
+        steps = self.content.render_steps(card)
         if len(steps) == 1:
             lines.append(steps[0])
         else:
             lines.extend(f"{i}. {step}" for i, step in enumerate(steps, 1))
+        if card.type == "checklist" and card.result:
+            lines.append(self.t("S3_result", result=card.result))
+        if card.help:
+            lines.append(self.t("S3_help", help=card.help))
         link = self.content.link_for(card)
         if link:
-            src = f"{card.source} — {link}" if card.source else link
-            lines.append(self.t("S3_more", link=src))
+            src = " — ".join(x for x in (card.source.doc, card.source.section) if x)
+            lines.append(self.t("S3_more", link=f"{src} — {link}" if src else link))
         return "\n".join(lines)
 
     def _rate(self, s: Session, cid: str, rating: str, uh: str, reply: Reply) -> None:
         card = self.content.cards.get(cid)
         s.card_id = cid
+        # каждое нажатие пишется в журнал; в метриках итоговой считается последняя оценка обращения
         self.journal.log(J.RATING, s.id, uh, card_id=cid, card_version=card.version if card else None, rating=rating)
         if rating == "helped":
             s.screen = "S3a"
@@ -201,23 +222,10 @@ class Engine:
             reply.screen = "S3a"
         else:
             s.screen = "S4"
-            rows = [[self.btn(label_key, f"why:{reason}:{cid}")] for reason, label_key in REASONS.items()]
+            topics = self._topics_data(card) if card else "menu"
+            rows = [[self.btn("other_topics", topics), self.btn("help", "help")], [self.btn("menu", "menu")]]
             reply.messages.append(Message(self.t("S4"), rows))
             reply.screen = "S4"
-
-    def _clarify(self, s: Session, cid: str, reason: str, uh: str, reply: Reply) -> None:
-        card = self.content.cards.get(cid)
-        if reason not in REASONS:
-            reason = "notfound"
-        s.screen, s.card_id = "S4a", cid
-        self.journal.log(J.CLARIFY, s.id, uh, card_id=cid, card_version=card.version if card else None, reason=reason)
-        link = self.content.link_for(card)
-        sec = card.section if card else None
-        rows = [[self.btn("help", "help")]]
-        rows.append([self.btn("other_topics", f"sec:{sec}:0")] if sec else [])
-        rows[-1].append(self.btn("menu", "menu"))
-        reply.messages.append(Message(self.t("S4a", link=link), rows))
-        reply.screen = "S4a"
 
     def _search(self, s: Session, query: str, uh: str, reply: Reply) -> None:
         q = query.strip()
@@ -248,6 +256,7 @@ class Engine:
             self._help_menu(s, reply)
             return
         s.screen = "S6a"
+        # card_id заполнен, если помощь запрошена после темы (в т.ч. после «Не помогло»); иначе — помощь без темы
         self.journal.log(J.HELP_REQUEST, s.id, uh, help_type=key, card_id=s.card_id)
         reply.messages.append(Message(text, [[self.btn("menu", "menu")]]))
         reply.screen = "S6a"
@@ -259,12 +268,13 @@ class Engine:
             self.journal.log(J.ATTACHMENT, s.id, uh, extra={"type": attachment})
             text = self.t("S7_attachment")
         else:
-            self.journal.log(J.UNRECOGNIZED, s.id, uh, query=self._safe_text(phrase or ""))
+            # вопрос без ответа — попадает в журнал для ответственного за содержание (канал сбора вопросов)
+            self.journal.log(J.QUESTION, s.id, uh, query=self._safe_text(phrase or ""), card_id=s.card_id)
             text = self.t("S7")
-            low = normalize(phrase or "")
-            if any(w in low for w in self.content.action_words):
+            if any(w in normalize(phrase or "") for w in self.content.action_words):
                 text = self.t("S7_action") + "\n" + text
-        reply.messages.append(Message(text, [[self.btn("menu", "menu"), self.btn("search", "search")]]))
+        rows = [[self.btn("menu", "menu"), self.btn("help", "help")]]
+        reply.messages.append(Message(text, rows))
         reply.screen = "S7"
 
     def _s8(self, s: Session) -> Message:
@@ -282,6 +292,12 @@ class Engine:
 
     def btn(self, label_key: str, data: str) -> Button:
         return Button(self.content.labels.get(label_key, label_key), data)
+
+    def _user_ref(self, user_id: str) -> str:
+        """Идентификатор участника в журнале: как есть (для ручной привязки к ПИ) или хеш."""
+        if self.settings.journal_user_mode == "hash":
+            return J.user_hash(user_id, self.settings.journal_salt)
+        return user_id
 
     def _safe_text(self, text: str) -> Optional[str]:
         if not self.settings.log_free_text:
