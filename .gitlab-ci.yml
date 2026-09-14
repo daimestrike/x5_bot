@@ -1,0 +1,55 @@
+# CI для GitLab (scm.x5.ru). Стадии: проверка содержания -> тесты -> сборка образа.
+# Переменные в настройках проекта (Settings -> CI/CD -> Variables):
+#   PIP_INDEX_URL      — зеркало PyPI в контуре (напр. https://art.x5.ru/artifactory/api/pypi/pypi/simple)
+#   DOCKER_IMAGE       — путь образа в registry (по умолчанию $CI_REGISTRY_IMAGE)
+stages: [check, test, build]
+
+variables:
+  PIP_INDEX_URL: ${PIP_INDEX_URL}
+  PYTHON_IMAGE: python:3.11-slim
+
+default:
+  image: $PYTHON_IMAGE
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths: [.cache/pip]
+  before_script:
+    - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
+    - pip install -r requirements-dev.txt
+
+validate-content:
+  stage: check
+  script:
+    - python scripts/validate_content.py content
+  rules:
+    - changes: [content/**/*, app/content.py, scripts/*]
+    - when: always
+
+lint:
+  stage: check
+  script:
+    - ruff check app scripts tests
+
+test:
+  stage: test
+  script:
+    - python -m pytest -q --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+
+build-image:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - IMAGE="${DOCKER_IMAGE:-$CI_REGISTRY_IMAGE}"
+    - docker build --build-arg PIP_INDEX_URL="$PIP_INDEX_URL" -t "$IMAGE:$CI_COMMIT_SHORT_SHA" -t "$IMAGE:latest" .
+    - docker push "$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$IMAGE:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG

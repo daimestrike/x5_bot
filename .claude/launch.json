@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bot",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--port", "8080", "--loop", "asyncio", "--http", "h11"],
+      "port": 8080
+    }
+  ]
+}
