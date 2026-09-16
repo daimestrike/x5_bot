@@ -190,3 +190,12 @@ def test_rate_limit(settings, event):
 def test_no_secret_file_served(client):
     for path in ("/.env", "/data/bot-v2.sqlite3", "/content/cards.yaml", "/content/cards"):
         assert client.get(path).status_code == 404
+
+
+def test_production_rejects_public_demo_secrets(settings, tmp_path):
+    from test_api import production_settings
+
+    prod = production_settings(settings, tmp_path)
+    with pytest.raises(ValueError, match="demo"):
+        replace(prod, api_token="demo-api-token-for-local-console-only-00000").validate()
+    replace(settings, api_token="demo-api-token-for-local-console-only-00000").validate()  # demo mode is fine

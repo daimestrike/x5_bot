@@ -25,7 +25,7 @@ Python **3.12**, зависимости из разрешённого зерка
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --find-links=wheels -r requirements-dev.txt
-python scripts/init_env.py
+python scripts/init_env.py            # .env с публичными демо-секретами; --secure для настоящих
 python scripts/validate_content.py
 python -m pytest -q
 python -m ruff check app scripts tests
@@ -33,13 +33,19 @@ python -m ruff check app scripts tests
 
 Если `wheels/` ещё не наполнен, установите зависимости через внутренний `PIP_INDEX_URL`, разрешённый в вашей организации. Wheels и базовый Docker-образ в исходный архив не включены.
 
-Необязательный симулятор диалога для разработчика:
+Симулятор диалога (демо-консоль):
 
 ```sh
 make demo
 ```
 
-Откройте `http://127.0.0.1:8080/dev/chat`, используйте `BOT_API_TOKEN` из `.env`. `make demo` явно включает консоль только для этого запуска. Это проверка сценария, она не подтверждает подключение к Rooms. Корневой адрес `/` не обслуживает веб-приложение.
+Откройте `http://127.0.0.1:8080/dev/chat`. Ключ разработчика уже подставлен в поле — это **публичный демо-ключ**, он есть в `.env.example`, и им может пользоваться любой тестировщик:
+
+```
+BOT_API_TOKEN=demo-api-token-for-local-console-only-00000
+```
+
+Все три `demo-*` значения из `.env.example` — фейковые. В production бот с ними не стартует (`BOT_MODE=production` отклоняет секреты с префиксом `demo-`); настоящие генерируются `python scripts/init_env.py --secure`. `make demo` явно включает консоль только для этого запуска. Это проверка сценария, она не подтверждает подключение к Rooms. Корневой адрес `/` не обслуживает веб-приложение.
 
 ## Контент и согласование
 

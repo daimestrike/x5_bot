@@ -86,6 +86,9 @@ class Settings:
         if self.mode == "production":
             from urllib.parse import urlsplit
 
+            if any(s.startswith("demo-") for s in secrets):
+                raise ValueError("Public demo-* secrets from .env.example are not allowed in production")
+
             u = urlsplit(self.rooms_api_base_url)
             if not self.rooms_contract_confirmed:
                 raise ValueError("Actual Rooms API contract must be confirmed before production")
