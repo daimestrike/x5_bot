@@ -3,12 +3,22 @@ services:
     build:
       context: .
       args:
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:?Set an approved internal Python image in .env}
     image: rooms-avatar-bot:local
     env_file: .env
     ports:
-      - "${PORT:-8080}:8080"
+      - "127.0.0.1:${PORT:-8080}:8080"
     volumes:
-      - ./data:/app/data
-      - ./content:/app/content:ro   # правка карточек без пересборки образа (перезапуск контейнера)
+      - bot_data:/app/data
+      - ./content:/app/content:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
     restart: unless-stopped
+volumes:
+  bot_data:

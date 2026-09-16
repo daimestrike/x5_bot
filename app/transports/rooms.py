@@ -1,127 +1,196 @@
-"""Транспорт X5 Rooms: разбор входящего webhook и отправка ответов через Bot API.
+"""eXpress BotX v4 adapter with the optional X5 Keycloak gateway in front of it.
 
-ВАЖНО. Формат Bot API Rooms задаётся в одном месте — здесь. При подключении к реальному
-контуру сверьте с документацией Rooms два метода:
-  * parse_update(payload)  — какие поля несут id пользователя/чата, текст, callback и вложения;
-  * build_payload(...)     — как выглядит тело запроса на отправку сообщения с кнопками.
-Остальной код бота от формата не зависит.
+Outbound scheme confirmed by the X5 wiki page «Под капотом у ROOMS bot-а» (DPP space):
+  1. Keycloak: POST KC_URL, client_credentials (client_id + client_secret) -> access_token;
+  2. Bot token: GET TOKEN_URL?signature=HMAC-SHA256(BOT_SECRET, BOT_ID) with the Keycloak token -> result;
+  3. Send: POST SEND_URL {"group_chat_id", "notification": {"status": "ok", "body", ...}} with both tokens
+     in headers. The exact header name for the Keycloak token is not shown on the page: ROOMS_KC_HEADER.
+When ROOMS_KC_URL is empty the adapter behaves as plain BotX (no gateway).
 
-Режимы кнопок (ROOMS_BUTTONS_MODE):
-  inline — кнопки передаются в теле сообщения (поле "buttons"), callback приходит в webhook;
-  text   — кнопки печатаются нумерованным списком, пользователь отвечает номером или подписью.
-           Работает в любом мессенджере, даже без поддержки кнопок.
+No URLs, credentials, directory attributes or attachment bodies from incoming
+commands are retained. Only the configured servers can receive outbound requests.
 """
-from __future__ import annotations
 
-import logging
-from typing import Any, Dict, List, Optional
+import hashlib
+import hmac
+import ssl
+from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
+import jwt
 
-from ..config import Settings
-from ..models import Incoming, Message, Reply
-
-log = logging.getLogger(__name__)
-
-# Возможные имена полей во входящем событии — берётся первое найденное.
-_USER_KEYS = ("user_id", "sender_id", "from_id", "userId", "senderId")
-_CHAT_KEYS = ("chat_id", "room_id", "dialog_id", "chatId", "roomId")
-_TEXT_KEYS = ("text", "body", "message")
-_CALLBACK_KEYS = ("callback_data", "callback", "data", "payload", "button_data")
-_ATTACH_KEYS = ("attachment_type", "attachments", "files", "voice", "photo", "document", "video", "sticker")
+from ..engine import validate_event
 
 
-def _first(d: Dict[str, Any], keys: tuple) -> Optional[Any]:
-    for k in keys:
-        if k in d and d[k] not in (None, "", [], {}):
-            return d[k]
-    return None
+class DeliveryError(Exception):
+    pass
 
 
-def parse_update(payload: Dict[str, Any]) -> Optional[tuple]:
-    """Возвращает (chat_id, Incoming) или None, если событие не про сообщение пользователя."""
-    msg = payload.get("message") if isinstance(payload.get("message"), dict) else payload
-    cb = payload.get("callback_query") if isinstance(payload.get("callback_query"), dict) else None
-    src = cb or msg
-    sender = next((src[k] for k in ("from", "sender", "user") if isinstance(src.get(k), dict)), {})
-    user_id = _first(src, _USER_KEYS) or _first(sender or {}, ("id",) + _USER_KEYS)
-    chat = src.get("chat") if isinstance(src.get("chat"), dict) else {}
-    chat_id = _first(src, _CHAT_KEYS) or _first(chat or {}, ("id",) + _CHAT_KEYS) or user_id
-    if user_id is None:
-        return None
-    if cb is not None:
-        callback = _first(cb, _CALLBACK_KEYS)
-        return str(chat_id), Incoming(user_id=str(user_id), callback=str(callback) if callback else None)
+def uuid_text(value):
+    if not isinstance(value, str):
+        raise ValueError("Expected UUID")
+    return str(UUID(value))
 
-    text = _first(msg, _TEXT_KEYS)
-    if isinstance(text, dict):
-        text = text.get("text")
-    callback = _first(msg, _CALLBACK_KEYS)
-    attachment: Optional[str] = None
-    for k in _ATTACH_KEYS:
-        v = msg.get(k)
-        if v:
-            attachment = v if isinstance(v, str) and k == "attachment_type" else k
-            if isinstance(v, list) and v and isinstance(v[0], dict):
-                attachment = str(v[0].get("type") or k)
-            break
-    return str(chat_id), Incoming(
-        user_id=str(user_id),
-        text=str(text) if text is not None else None,
-        callback=str(callback) if callback else None,
-        attachment_type=attachment,
+
+def verify_token(token, settings):
+    claims = jwt.decode(
+        token,
+        settings.rooms_secret_key,
+        algorithms=["HS256"],
+        audience=settings.rooms_bot_id,
+        issuer=settings.rooms_issuer,
+        options={"require": ["iss", "aud", "exp", "nbf", "iat", "jti"]},
     )
+    if (
+        not isinstance(claims["jti"], str)
+        or not claims["jti"]
+        or claims["exp"] - claims["iat"] > 60
+        or claims["exp"] <= claims["iat"]
+        or claims["nbf"] != claims["iat"]
+    ):
+        raise jwt.InvalidTokenError("Invalid token lifetime")
+    return claims
 
 
-def build_payload(chat_id: str, message: Message, buttons_mode: str) -> Dict[str, Any]:
-    text = message.text
-    payload: Dict[str, Any] = {"chat_id": chat_id}
-    if buttons_mode == "text" and message.buttons:
-        lines = [text, ""]
-        n = 0
-        for row in message.buttons:
-            for b in row:
-                n += 1
-                lines.append(f"{n}. {b.label}")
-        lines.append("")
-        lines.append("Ответьте номером или названием кнопки.")
-        payload["text"] = "\n".join(lines)
+def parse_update(payload, settings):
+    if not isinstance(payload, dict) or payload.get("proto_version") != 4:
+        raise ValueError("Expected Bot API v4")
+    if uuid_text(payload.get("bot_id")) != settings.rooms_bot_id:
+        raise ValueError("Wrong bot")
+    eid = uuid_text(payload.get("sync_id"))
+    command, sender = payload.get("command"), payload.get("from")
+    if not isinstance(command, dict) or not isinstance(sender, dict):
+        raise ValueError("Invalid command")
+    # The issuer may be a separate BotX hostname. Sender host is the configured CTS.
+    if sender.get("host") != urlsplit(settings.rooms_api_base_url).hostname:
+        raise ValueError("Wrong CTS host")
+    body, kind = command.get("body"), command.get("command_type")
+    if not isinstance(body, str) or kind not in ("user", "system"):
+        raise ValueError("Invalid command body")
+    if kind == "system":
+        if body != "system:chat_created":
+            return None
+        data = command.get("data", {})
+        if not isinstance(data, dict) or data.get("chat_type") != "chat":
+            return None
+        event = dict(
+            event_id=eid,
+            conversation_id=uuid_text(data.get("group_chat_id")),
+            user_id=uuid_text(data.get("creator")),
+            type="opened",
+        )
     else:
-        payload["text"] = text
-        if message.buttons:
-            payload["buttons"] = [[{"text": b.label, "callback_data": b.data} for b in row] for row in message.buttons]
-    return payload
+        # MVP is a personal reference chat, never broadcast employee queries to groups.
+        if sender.get("chat_type") != "chat":
+            return None
+        event = dict(
+            event_id=eid, conversation_id=uuid_text(sender.get("group_chat_id")), user_id=uuid_text(sender.get("user_huid"))
+        )
+        if payload.get("attachments") or payload.get("async_files"):
+            event.update(type="attachment", attachment_type="other")
+        elif body == "/action":
+            data = command.get("data")
+            if not isinstance(data, dict) or not isinstance(data.get("action"), str):
+                raise ValueError("Invalid button data")
+            event.update(type="action", action=data["action"])
+        elif body.strip() == "/end":
+            event.update(type="closed")
+        elif len(body) > 500 or not body.strip():
+            event.update(type="action", action="unsupported")
+        else:
+            event.update(type="message", text=body)
+    validate_event(event)
+    return event
+
+
+def button(label, action):
+    return {"command": "/action", "label": label, "data": {"action": action}, "opts": {"silent": True}}
+
+
+def build_payload(chat_id, message):
+    rows = [[button(b["label"], b["action"])] for b in message["buttons"]]
+    if message["screen"] == "S3" and len(rows) == 4:
+        rows = [rows[0] + rows[1], rows[2] + rows[3]]
+    return {
+        "group_chat_id": uuid_text(chat_id),
+        "notification": {
+            "status": "ok",
+            "body": message["text"],
+            "bubble": rows,
+            "keyboard": [[button("Меню", "menu"), button("Поиск", "search")]],
+            "opts": {"silent_response": False, "buttons_auto_adjust": True},
+        },
+        "opts": {"notification_opts": {"send": False, "force_dnd": False}},
+    }
 
 
 class RoomsClient:
-    def __init__(self, settings: Settings):
-        self.s = settings
-        self._client = httpx.AsyncClient(
-            base_url=settings.rooms_api_base_url,
-            timeout=settings.rooms_timeout_s,
-            verify=settings.rooms_verify_tls,
-            headers={"Authorization": f"Bearer {settings.rooms_bot_token}"} if settings.rooms_bot_token else {},
+    def __init__(self, settings):
+        self.settings, self.token, self.kc_token = settings, None, None
+        if settings.rooms_verify_tls:
+            verify = ssl.create_default_context(cafile=settings.rooms_ca_file or None)
+        else:
+            verify = False  # internal networks with self-signed certificates (VERIFY_SSL=False on the wiki page)
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(15, connect=5), verify=verify, trust_env=False, follow_redirects=False
         )
 
-    @property
-    def configured(self) -> bool:
-        return bool(self.s.rooms_api_base_url)
+    def headers(self, with_bot_token=True):
+        h = {}
+        if self.kc_token:
+            h[self.settings.rooms_kc_header] = self.kc_token
+        if with_bot_token and self.token:
+            h["Authorization"] = "Bearer " + self.token
+        return h
 
-    async def send_reply(self, chat_id: str, reply: Reply) -> List[Dict[str, Any]]:
-        sent = []
-        for m in reply.messages:
-            payload = build_payload(chat_id, m, self.s.rooms_buttons_mode)
-            if not self.configured:
-                log.info("ROOMS_API_BASE_URL не задан — сообщение не отправлено: %s", payload["text"][:80])
-                sent.append(payload)
-                continue
-            try:
-                r = await self._client.post(self.s.rooms_send_path, json=payload)
-                r.raise_for_status()
-            except httpx.HTTPError as e:  # сбой бота не должен мешать ПИ — только лог
-                log.error("Rooms send failed: %s", e)
-            sent.append(payload)
-        return sent
+    async def authenticate_keycloak(self):
+        s = self.settings
+        if not s.rooms_kc_url:
+            return
+        response = await self.client.post(
+            s.rooms_kc_url,
+            data={"grant_type": "client_credentials", "client_id": s.rooms_kc_client_id,
+                  "client_secret": s.rooms_kc_client_secret},
+        )
+        response.raise_for_status()
+        token = response.json().get("access_token")
+        if not isinstance(token, str) or not token:
+            raise DeliveryError("Keycloak authentication rejected")
+        self.kc_token = token
 
-    async def aclose(self) -> None:
-        await self._client.aclose()
+    async def authenticate(self):
+        s = self.settings
+        await self.authenticate_keycloak()
+        signature = hmac.new(s.rooms_secret_key.encode(), s.rooms_bot_id.encode(), hashlib.sha256).hexdigest().upper()
+        response = await self.client.get(s.token_url, params={"signature": signature}, headers=self.headers(False))
+        response.raise_for_status()
+        data = response.json()
+        if data.get("status") != "ok" or not isinstance(data.get("result"), str) or not data["result"]:
+            raise DeliveryError("BotX authentication rejected")
+        self.token = data["result"]
+
+    async def send(self, chat_id, message):
+        if self.settings.mode != "production":
+            raise DeliveryError("BotX delivery disabled")
+        try:
+            for attempt in range(2):
+                if self.token is None:
+                    await self.authenticate()
+                response = await self.client.post(
+                    self.settings.send_url, headers=self.headers(), json=build_payload(chat_id, message)
+                )
+                if response.status_code == 401 and attempt == 0:
+                    self.token = self.kc_token = None
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if response.status_code != 200 or data.get("status") != "ok":
+                    raise DeliveryError("BotX delivery rejected")
+                uuid_text(data["result"]["sync_id"])
+                return
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+            raise DeliveryError("BotX delivery failed") from None
+
+    async def aclose(self):
+        await self.client.aclose()

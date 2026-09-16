@@ -1,2 +1,3 @@
-"""Справочный бот Аватара для удалённой ПИ в мессенджере Rooms."""
-__version__ = "0.1.0"
+"""Source-driven Rooms Avatar reference bot."""
+
+__version__ = "2.0.0"

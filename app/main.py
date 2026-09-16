@@ -1,161 +1,257 @@
-"""HTTP-приложение: webhook Rooms, демо-консоль для приёмки, метрики, healthcheck."""
-from __future__ import annotations
+"""Authenticated API. Core state and retry progress are persisted in SQLite."""
 
+import asyncio
 import csv
+import hmac
 import io
 import logging
-from contextlib import asynccontextmanager
+import os
+import sqlite3
+import time
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, Dict, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+import jwt
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
-from . import __version__
-from .config import Settings, load_settings
-from .content import ContentError, load_content
-from .engine import Engine
-from .journal import COLUMNS, Journal
-from .metrics import appeals_table, summary
-from .models import Incoming
-from .sessions import SessionStore
-from .transports.rooms import RoomsClient, parse_update
+from .config import Settings
+from .content import Catalog
+from .delivery import Delivery, QueueFull
+from .engine import Engine, validate_event
+from .transports.rooms import RoomsClient, parse_update, verify_token
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("app")
-
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC = Path(__file__).parent / "static"
+LOG = logging.getLogger("rooms_bot")
 
 
-def create_app(settings: Optional[Settings] = None) -> FastAPI:
-    settings = settings or load_settings()
-    try:
-        content = load_content(settings.content_dir, strict=settings.content_strict)
-    except ContentError as e:
-        log.error("%s", e)
-        raise
-    journal = Journal(settings.db_path)
-    sessions = SessionStore(settings.session_ttl_min * 60)
-    engine = Engine(content, journal, sessions, settings)
+class BodyLimit:
+    """Bound buffering before Starlette parses the request body."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        chunks, size = [], 0
+        try:
+            while True:
+                message = await asyncio.wait_for(receive(), 2)
+                if message["type"] == "http.disconnect":
+                    return
+                chunk = message.get("body", b"")
+                size += len(chunk)
+                if size > 16384:
+                    return await JSONResponse({"error": "body_too_large"}, status_code=413)(scope, receive, send)
+                chunks.append(chunk)
+                if not message.get("more_body", False):
+                    break
+        except asyncio.TimeoutError:
+            return await JSONResponse({"error": "request_timeout"}, status_code=408)(scope, receive, send)
+
+        async def buffered():
+            return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
+
+        await self.app(scope, buffered, send)
+
+
+def create_app(settings=None):
+    # uvicorn uses --factory, so importing this module does not create a DB or client.
+    settings = settings or Settings.from_env()
+    settings.validate()
+    os.umask(0o077)
+    engine = Engine(
+        Catalog(settings.content_dir, production=settings.mode == "production"),
+        settings.db_path,
+        settings.state_secret,
+        settings.session_ttl,
+        settings.retention_days,
+    )
     rooms = RoomsClient(settings)
+    delivery = Delivery(engine, rooms)
+    # HTTP request URLs may contain BotX signatures or user attributes.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    buckets = {}
+
+    async def cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                with engine.connect() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    engine.cleanup(db, time.time())
+            except sqlite3.Error:
+                LOG.error("cleanup_failed")
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
-        log.info("bot started: %d cards, rooms_configured=%s", len(content.cards), rooms.configured)
-        yield
+    async def lifespan(_):
+        tasks = [asyncio.create_task(cleanup_loop())]
+        if settings.mode == "production":
+            tasks.append(asyncio.create_task(delivery.run()))
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with suppress(asyncio.CancelledError):
+                    await task
         await rooms.aclose()
-        journal.close()
 
-    app = FastAPI(title="Rooms bot — справочник Аватара", version=__version__, docs_url=None, redoc_url=None,
-                  lifespan=lifespan)
-    app.state.settings = settings
-    app.state.engine = engine
-    app.state.journal = journal
-    app.state.rooms = rooms
+    app = FastAPI(title="Справочник Аватара", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.add_middleware(BodyLimit)
+    app.state.engine, app.state.rooms, app.state.settings = engine, rooms, settings
+    app.state.delivery = delivery
 
-    # ---------------------------------------------------------------- health
-    @app.get("/health")
-    async def health() -> Dict[str, Any]:
-        return {"status": "ok", "version": __version__, "cards": len(content.cards),
-                "search_enabled": settings.search_enabled,
-                "rooms_configured": rooms.configured, "content_warnings": len(content.warnings)}
+    @app.middleware("http")
+    async def headers(request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        )
+        return response
 
-    # ------------------------------------------------------------ webhook Rooms
-    def _check_webhook_secret(x_rooms_token: Optional[str] = Header(default=None),
-                              authorization: Optional[str] = Header(default=None)) -> None:
-        if not settings.rooms_webhook_secret:
-            return
-        token = x_rooms_token or (authorization or "").replace("Bearer ", "").strip()
-        if token != settings.rooms_webhook_secret:
-            raise HTTPException(status_code=401, detail="bad webhook token")
+    def limit(request):
+        now = time.monotonic()
+        for key in list(buckets):
+            if buckets[key][0] < now - 60:
+                del buckets[key]
+        key = request.client.host if request.client else "unknown"
+        if key not in buckets:
+            if len(buckets) >= 4096:
+                raise HTTPException(429, "rate_limited")
+            buckets[key] = [now, 0]
+        buckets[key][1] += 1
+        if buckets[key][1] > settings.requests_per_minute:
+            raise HTTPException(429, "rate_limited")
 
-    @app.post("/webhook/rooms", dependencies=[Depends(_check_webhook_secret)])
-    async def rooms_webhook(request: Request) -> Dict[str, Any]:
+    def authorize(request, admin=False):
+        limit(request)
+        token = settings.metrics_token if admin else settings.api_token
+        values = request.headers.getlist("authorization")
+        if len(values) != 1 or not hmac.compare_digest(values[0].encode(), ("Bearer " + token).encode()):
+            raise HTTPException(401, "unauthorized")
+
+    def botx_auth(request):
+        limit(request)
+        if settings.mode != "production":
+            raise HTTPException(503, "rooms_not_configured")
+        values = request.headers.getlist("authorization")
+        if len(values) != 1 or not values[0].startswith("Bearer "):
+            raise HTTPException(401, "unauthorized")
+        try:
+            verify_token(values[0][7:], settings)
+        except (jwt.InvalidTokenError, ValueError, TypeError):
+            raise HTTPException(401, "unauthorized") from None
+
+    async def body(request, console=False):
+        if request.headers.get("content-type", "").split(";")[0] != "application/json":
+            raise HTTPException(415, "expected_json")
         try:
             payload = await request.json()
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail="invalid json") from e
-        parsed = parse_update(payload if isinstance(payload, dict) else {})
-        if parsed is None:
-            return {"ok": True, "ignored": True}
-        chat_id, inc = parsed
-        reply = engine.handle(inc)
-        sent = await rooms.send_reply(chat_id, reply)
-        # Ответ в теле пригодится, если Rooms поддерживает синхронный ответ на webhook.
-        return {"ok": True, "screen": reply.screen, "messages": sent}
+            if console:
+                validate_event(payload)
+                return payload
+            return parse_update(payload, settings)
+        except (ValueError, TypeError, RecursionError):
+            raise HTTPException(400, "invalid_event") from None
 
-    # ------------------------------------------------------- демо-консоль (приёмка)
-    if settings.demo_console:
-        @app.get("/", response_class=HTMLResponse)
-        async def index() -> str:
-            return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    @app.exception_handler(sqlite3.Error)
+    async def database_error(request, error):
+        LOG.error("database_unavailable")
+        return JSONResponse({"error": "temporarily_unavailable"}, status_code=503)
 
-        @app.post("/api/console")
-        async def console(body: Dict[str, Any]) -> Dict[str, Any]:
-            inc = Incoming(
-                user_id=str(body.get("user_id") or "demo"),
-                text=body.get("text"),
-                callback=body.get("callback"),
-                attachment_type=body.get("attachment_type"),
-            )
-            reply = engine.handle(inc)
-            return {
-                "screen": reply.screen,
-                "messages": [
-                    {"text": m.text, "buttons": [[{"label": b.label, "data": b.data} for b in row] for row in m.buttons]}
-                    for m in reply.messages
-                ],
-            }
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "mode": settings.mode, "rooms_verified": settings.rooms_contract_confirmed}
 
-        @app.post("/api/console/reset")
-        async def console_reset(body: Dict[str, Any]) -> Dict[str, Any]:
-            sessions.reset(str(body.get("user_id") or "demo"))
-            return {"ok": True}
+    @app.get("/ready")
+    async def ready():
+        with engine.connect() as db:
+            db.execute("SELECT 1 FROM sessions LIMIT 1")
+        return {"status": "ready", "cards": len(engine.catalog.cards)}
 
-    # ---------------------------------------------------------------- метрики
-    def _check_metrics_token(x_metrics_token: Optional[str] = Header(default=None)) -> None:
-        if settings.metrics_token and x_metrics_token != settings.metrics_token:
-            raise HTTPException(status_code=401, detail="bad metrics token")
-
-    @app.get("/metrics/summary", dependencies=[Depends(_check_metrics_token)])
-    async def metrics_summary(since: Optional[str] = None, until: Optional[str] = None) -> JSONResponse:
-        return JSONResponse(summary(journal, since, until))
-
-    @app.get("/metrics/journal.csv", dependencies=[Depends(_check_metrics_token)])
-    async def journal_csv(since: Optional[str] = None, until: Optional[str] = None) -> PlainTextResponse:
-        rows = journal.rows(since, until)
-        buf = io.StringIO()
-        w = csv.writer(buf, delimiter=";")
-        w.writerow(COLUMNS)
-        for r in rows:
-            w.writerow([r[c] for c in COLUMNS])
-        return PlainTextResponse(buf.getvalue(), media_type="text/csv; charset=utf-8")
-
-    @app.get("/metrics/appeals.csv", dependencies=[Depends(_check_metrics_token)])
-    async def appeals_csv(since: Optional[str] = None, until: Optional[str] = None) -> PlainTextResponse:
-        """Обращения для ручной привязки к ПИ: участник, сеанс, время, тема, версия, итоговая оценка, помощь."""
-        cols = ["user_ref", "session_id", "first_ts", "last_ts", "card_id", "card_version", "views", "final_rating", "help"]
-        buf = io.StringIO()
-        w = csv.writer(buf, delimiter=";")
-        w.writerow(cols)
-        for t in appeals_table(journal, since, until):
-            w.writerow([t[c] for c in cols])
-        return PlainTextResponse(buf.getvalue(), media_type="text/csv; charset=utf-8")
-
-    @app.get("/content/cards")
-    async def cards_list() -> Dict[str, Any]:
-        """Реестр: опубликованные материалы по типам + все версии (черновики и снятые) для разбора."""
+    @app.get("/status")
+    async def status(request: Request):
+        botx_auth(request)
+        if request.query_params.get("bot_id") != settings.rooms_bot_id:
+            raise HTTPException(400, "wrong_bot")
         return {
-            "types": [{"id": t.id, "title": t.title, "cards": [
-                {"id": c.id, "title": c.title, "group": c.group, "version": c.version, "checked": c.checked,
-                 "owner": c.owner, "reviewer": c.reviewer, "link": content.link_for(c)}
-                for c in content.cards_of_type(t.id)]} for t in content.types],
-            "versions": {cid: [{"version": c.version, "status": c.status} for c in vs]
-                         for cid, vs in content.all_versions.items()},
-            "warnings": content.warnings,
+            "status": "ok",
+            "result": {
+                "enabled": True,
+                "status_message": "Справочник Аватара",
+                "commands": [
+                    {"body": cmd, "name": label, "description": label}
+                    for cmd, label in [("/menu", "Меню"), ("/search", "Поиск"), ("/help", "Помощь человека")]
+                ],
+            },
         }
 
+    @app.post("/command", status_code=202)
+    async def command(request: Request):
+        botx_auth(request)
+        event = await body(request)
+        if event is not None:
+            try:
+                engine.handle(event, deferred=True, enqueue=delivery.enqueue(event["conversation_id"]))
+            except QueueFull:
+                raise HTTPException(503, "queue_full_retry_later") from None
+            except ValueError:
+                raise HTTPException(409, "event_conflict") from None
+        # No external I/O before ACK. Queue and dialog state commit in one transaction.
+        return {"result": "accepted"}
+
+    @app.post("/notification/callback", status_code=202)
+    async def callback(request: Request):
+        botx_auth(request)
+        # Outgoing /direct/sync returns the result inline. Unsolicited callbacks
+        # cannot confirm or modify delivery progress.
+        return {"result": "accepted"}
+
+    if settings.mode == "demo" and settings.enable_dev_console:
+
+        @app.get("/dev/chat")
+        async def index():
+            return FileResponse(STATIC / "index.html")
+
+        @app.get("/dev/app.js")
+        async def javascript():
+            return FileResponse(STATIC / "app.js", media_type="text/javascript")
+
+        @app.get("/dev/style.css")
+        async def stylesheet():
+            return FileResponse(STATIC / "style.css", media_type="text/css")
+
+        @app.post("/api/console")
+        async def console(request: Request):
+            authorize(request)
+            event = await body(request, console=True)
+            try:
+                return engine.handle(event)
+            except ValueError:
+                raise HTTPException(409, "event_conflict") from None
+
+    @app.get("/metrics/summary")
+    async def metrics(request: Request):
+        authorize(request, admin=True)
+        return {**engine.metrics(), "delivery": delivery.stats()}
+
+    @app.get("/metrics/journal.csv")
+    async def journal_csv(request: Request):
+        authorize(request, admin=True)
+        rows = engine.journal_rows()
+        buffer = io.StringIO()
+        cols = ["time", "kind", "topic", "version", "value", "delivered"]
+        writer = csv.DictWriter(buffer, fieldnames=cols, delimiter=";")
+        writer.writeheader()
+        writer.writerows(rows)
+        return PlainTextResponse(buffer.getvalue(), media_type="text/csv; charset=utf-8")
+
     return app
-
-
-app = create_app()

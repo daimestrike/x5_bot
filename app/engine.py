@@ -1,310 +1,379 @@
-"""Диалоговый движок (MVP v11): меню -> раздел (тип материала) -> тема -> материал; оценка; помощь.
-
-Не зависит от мессенджера: на вход Incoming, на выход Reply с текстами и кнопками.
-Callback-данные кнопок:
-    menu | search | help | help:<pi|tech|org>
-    type:<answer|instruction|checklist>            список тем или разделов типа
-    type:<tid>:<group>:<page>                      список тем раздела внутри типа
-    card:<ID> | ok:<ID> | no:<ID>
-Правила v11: бот показывает только опубликованные материалы; повтор темы в сеансе — то же обращение;
-последняя оценка — итоговая; свободный текст не разбирается по смыслу, а записывается для ответственного.
-"""
-from __future__ import annotations
-
-import logging
+import hashlib
+import hmac
+import json
 import re
-from typing import List, Optional
+import sqlite3
+import time
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
 
-from . import journal as J
-from .config import Settings
-from .content import Card, Content
-from .models import Button, Incoming, Message, Reply
-from .search import is_search_query, normalize, search
-from .sessions import Session, SessionStore
+from .content import normalized
 
-log = logging.getLogger(__name__)
+WELCOME = (
+    "Я справочник Аватара. Помогаю с подготовкой к ПИ, связью и сбоями, "
+    "правилами съёмки и действиями после ПИ. По самим этапам вас ведёт ревизор голосом. "
+    "Нажмите «Меню» — или напишите одно слово, например «модем»."
+)
+MENU = {"label": "Меню", "action": "menu"}
+HELP = {"label": "Помощь человека", "action": "help"}
+SEARCH = {"label": "Поиск", "action": "search"}
+REASONS = {"wrong": "Не то, что искал", "details": "Не хватает деталей", "failed": "Сделал, не сработало"}
 
-TOPICS_PER_PAGE = 8
-MENU_COMMANDS = {"/start", "start", "старт", "/menu", "меню", "menu", "начать"}
+
+def screen(code, text, buttons=None, **fields):
+    return dict(screen=code, text=text, buttons=buttons or [MENU], **fields)
+
+
+def validate_event(e):
+    if not isinstance(e, dict) or set(e) - {
+        "event_id",
+        "conversation_id",
+        "user_id",
+        "type",
+        "text",
+        "action",
+        "attachment_type",
+    }:
+        raise ValueError("Unknown event fields")
+    for key in ("event_id", "conversation_id", "user_id"):
+        if not isinstance(e.get(key), str) or not 1 <= len(e[key]) <= 128:
+            raise ValueError("Invalid " + key)
+    if e.get("type") not in ("opened", "closed", "message", "action", "attachment"):
+        raise ValueError("Invalid event type")
+    for key, limit in [("text", 500), ("action", 128), ("attachment_type", 32)]:
+        if key in e and (not isinstance(e[key], str) or len(e[key]) > limit):
+            raise ValueError("Invalid " + key)
+    if e["type"] == "message" and not e.get("text", "").strip():
+        raise ValueError("Empty text")
+    if e["type"] == "action" and not e.get("action", ""):
+        raise ValueError("Empty action")
 
 
 class Engine:
-    def __init__(self, content: Content, journal: J.Journal, sessions: SessionStore, settings: Settings):
-        self.content = content
-        self.journal = journal
-        self.sessions = sessions
-        self.settings = settings
+    def __init__(self, catalog, db_path, secret, session_ttl=14400, retention_days=30):
+        self.catalog, self.db_path, self.secret = catalog, str(db_path), secret.encode()
+        self.session_ttl, self.retention = session_ttl, retention_days * 86400
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as db:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            if tables and version != 2:
+                raise ValueError("Legacy database detected. Use a new DB_PATH; retain the old journal separately.")
+            db.executescript("""
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS sessions (
+                    sid TEXT PRIMARY KEY, last_seen REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS dedup (
+                    eid TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL,
+                    created REAL NOT NULL, sent_count INTEGER NOT NULL DEFAULT 0,
+                    completed INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS views (
+                    id TEXT PRIMARY KEY, sid TEXT NOT NULL, card TEXT NOT NULL, version TEXT NOT NULL,
+                    section TEXT NOT NULL, url TEXT NOT NULL, created REAL NOT NULL,
+                    rating TEXT, reason TEXT);
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY, time REAL NOT NULL, kind TEXT NOT NULL,
+                    topic TEXT, version TEXT, value TEXT, delivery TEXT, delivered INTEGER NOT NULL DEFAULT 1,
+                    interaction TEXT);
+                CREATE INDEX IF NOT EXISTS events_time ON events(time);
+                CREATE INDEX IF NOT EXISTS views_sid ON views(sid);
+                CREATE INDEX IF NOT EXISTS views_created ON views(created);
+                CREATE INDEX IF NOT EXISTS dedup_created ON dedup(created);
+                CREATE INDEX IF NOT EXISTS sessions_seen ON sessions(last_seen);
+                PRAGMA user_version=2;
+            """)
 
-    # ------------------------------------------------------------------ public
-    def handle(self, inc: Incoming) -> Reply:
-        session, is_new = self.sessions.get_or_create(inc.user_id)
-        uh = self._user_ref(inc.user_id)
-        reply = Reply()
-        if is_new:
-            self.journal.log(J.SESSION_START, session.id, uh)
-            reply.messages.append(Message(self.t("S0")))
-            reply.screen = "S0"
+    @contextmanager
+    def connect(self):
+        db = sqlite3.connect(self.db_path, timeout=1)
+        db.row_factory = sqlite3.Row
         try:
-            action = self._resolve_action(session, inc)
-            if action is None:
-                action = "menu"  # открытие бота = главное меню (v11 «Логика ответов»)
-            self._dispatch(action, session, uh, reply)
-        except Exception:  # noqa: BLE001 — любой сбой выдачи -> S8, ПИ не останавливается
-            log.exception("material error, session %s", session.id)
-            self.journal.log(J.MATERIAL_ERROR, session.id, uh, card_id=session.card_id)
-            reply.messages.append(self._s8(session))
-            reply.screen = "S8"
-        self._remember(session, reply)
-        return reply
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
-    # ------------------------------------------------------------- resolution
-    def _resolve_action(self, session: Session, inc: Incoming) -> Optional[str]:
-        if inc.callback:
-            return inc.callback.strip()
-        if inc.attachment_type and not (inc.text or "").strip():
-            return f"attachment:{inc.attachment_type}"
-        text = (inc.text or "").strip()
-        if not text:
-            return None
-        low = normalize(text)
-        if low in MENU_COMMANDS:
-            return "menu"
-        if re.fullmatch(r"\d{1,2}", low):  # ответ номером кнопки
-            idx = int(low) - 1
-            if 0 <= idx < len(session.last_buttons):
-                return session.last_buttons[idx].data
-        for b in session.last_buttons:  # ответ подписью кнопки
-            if normalize(b.label) == low:
-                return b.data
-        for key, label in self.content.labels.items():
-            if normalize(label) == low:
-                return {"search": "search", "help": "help"}.get(key, "menu")
-        if low in self.content.thanks_words:
-            return "thanks"
-        if self.settings.search_enabled and (session.awaiting_search or is_search_query(text)):
-            return f"query:{text}"
-        return f"free:{text}"
+    def digest(self, value):
+        return hmac.new(self.secret, value.encode(), hashlib.sha256).hexdigest()
 
-    def _dispatch(self, action: str, s: Session, uh: str, reply: Reply) -> None:
-        parts = action.split(":")
-        kind = parts[0]
-        s.awaiting_search = False
+    def log(self, db, now, kind, topic=None, version=None, value=None, interaction=None):
+        db.execute(
+            "INSERT INTO events(time,kind,topic,version,value,interaction) VALUES(?,?,?,?,?,?)",
+            (now, kind, topic, version, value, interaction),
+        )
 
-        if kind in ("menu", "back"):
-            self._goto_menu(s, reply)
-        elif kind == "type" and len(parts) >= 2:
-            group = parts[2] if len(parts) > 2 and parts[2] else None
-            page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
-            self._show_type(s, parts[1], group, page, reply)
-        elif kind == "card" and len(parts) >= 2:
-            self._show_card(s, parts[1], uh, reply)
-        elif kind in ("ok", "no") and len(parts) >= 2:
-            self._rate(s, parts[1], "helped" if kind == "ok" else "not_helped", uh, reply)
-        elif kind == "search" and self.settings.search_enabled:
-            s.screen, s.awaiting_search = "S5", True
-            reply.messages.append(Message(self.t("S5"), [[self.btn("menu", "menu")]]))
-            reply.screen = "S5"
-        elif kind == "query":
-            self._search(s, action.split(":", 1)[1], uh, reply)
-        elif kind == "help":
-            if len(parts) >= 2:
-                self._help_route(s, parts[1], uh, reply)
+    def cleanup(self, db, now):
+        stale = list(db.execute("SELECT sid,last_seen FROM sessions WHERE last_seen < ?", (now - self.session_ttl,)))
+        for session in stale:
+            db.execute("DELETE FROM views WHERE sid=?", (session["sid"],))
+            self.log(db, session["last_seen"] + self.session_ttl, "session_end", value="timeout")
+        db.execute("DELETE FROM sessions WHERE last_seen < ?", (now - self.session_ttl,))
+        db.execute("DELETE FROM views WHERE created < ?", (now - self.session_ttl,))
+        db.execute("DELETE FROM dedup WHERE created < ?", (now - 86400,))
+        db.execute("DELETE FROM events WHERE time < ?", (now - self.retention,))
+
+    def handle(self, event, now=None, deferred=False, enqueue=None):
+        validate_event(event)
+        now = time.time() if now is None else now
+        sid = self.digest(json.dumps([event["conversation_id"], event["user_id"]]))
+        eid = self.digest(json.dumps([sid, event["event_id"]]))
+        fingerprint = self.digest(json.dumps(event, sort_keys=True, ensure_ascii=False))
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.cleanup(db, now)
+            event_start = db.execute("SELECT COALESCE(MAX(id),0) FROM events").fetchone()[0]
+            old = db.execute("SELECT * FROM dedup WHERE eid=?", (eid,)).fetchone()
+            if old:
+                if old["fingerprint"] != fingerprint:
+                    raise ValueError("Event ID reused with a different payload")
+                result = json.loads(old["response"])
+                if enqueue and not old["completed"]:
+                    enqueue(db, result)
+                return result
+            active = db.execute("SELECT * FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if event["type"] == "closed":
+                if active:
+                    self.log(db, now, "session_end", value="closed")
+                    db.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+                    db.execute("DELETE FROM views WHERE sid=?", (sid,))
+                messages = []
             else:
-                self._help_menu(s, reply)
-        elif kind == "attachment":
-            self._unrecognized(s, uh, reply, attachment=parts[1] if len(parts) > 1 else "file")
-        elif kind == "thanks":
-            self.journal.log(J.THANKS, s.id, uh)
-            s.screen = "S7"
-            reply.messages.append(Message(self.t("S7_thanks"), [[self.btn("menu", "menu")]]))
-            reply.screen = "S7"
-        elif kind == "free":
-            self._unrecognized(s, uh, reply, phrase=action.split(":", 1)[1])
-        else:
-            self._goto_menu(s, reply)  # неизвестная/устаревшая кнопка
+                db.execute("INSERT OR REPLACE INTO sessions VALUES(?,?)", (sid, now))
+                if not active:
+                    self.log(db, now, "session_start")
+                if event["type"] == "opened":
+                    messages = [] if active else [screen("S0", WELCOME)]
+                else:
+                    messages = ([] if active else [screen("S0", WELCOME)]) + [self.respond(db, sid, event, now)]
+            # A new delivery attempt for a still-undelivered appeal must confirm the same
+            # appeal, rather than leaving its metric bound to a failed earlier request.
+            if deferred:
+                for message in messages:
+                    if message.get("card_id"):
+                        db.execute(
+                            "UPDATE events SET delivery=? WHERE kind='card' AND delivered=0 "
+                            "AND interaction IN (SELECT id FROM views WHERE sid=? AND card=? AND version=?)",
+                            (eid, sid, message["card_id"], message["version"]),
+                        )
+            # Responses never echo raw user text, so replay cache contains no free-form input.
+            result = {"messages": messages, "reply_id": eid}
+            if deferred:
+                db.execute("UPDATE events SET delivery=?,delivered=0 WHERE id>? AND kind='card'", (eid, event_start))
+            db.execute(
+                "INSERT INTO dedup(eid,fingerprint,response,created) VALUES(?,?,?,?)",
+                (eid, fingerprint, json.dumps(result, ensure_ascii=False), now),
+            )
+            if enqueue:
+                enqueue(db, result)
+            return result
 
-    # ---------------------------------------------------------------- screens
-    def _goto_menu(self, s: Session, reply: Reply) -> None:
-        s.screen, s.type, s.group, s.page, s.card_id = "S1", None, None, 0, None
-        rows: List[List[Button]] = [[Button(t.title, f"type:{t.id}")] for t in self.content.types]
-        last = [self.btn("help", "help")]
-        if self.settings.search_enabled:
-            last.insert(0, self.btn("search", "search"))
-        rows.append(last)
-        reply.messages.append(Message(self.t("S1"), rows))
-        reply.screen = "S1"
+    def menu(self):
+        return screen(
+            "S1",
+            "Что нужно?",
+            [{"label": name, "action": "section:" + key + ":0"} for key, name in self.catalog.settings["sections"].items()]
+            + [SEARCH, HELP],
+        )
 
-    def _show_type(self, s: Session, tid: str, group: Optional[str], page: int, reply: Reply) -> None:
-        title = self.content.type_title(tid)
-        if title is None:
-            self._goto_menu(s, reply)
-            return
-        cards = self.content.cards_of_type(tid)
-        groups = self.content.groups_of_type(tid)
-        # Больше одной страницы тем -> сначала разделы, чтобы до любой темы было <= 3 нажатий
-        if group is None and len(cards) > TOPICS_PER_PAGE and len(groups) > 1:
-            s.screen, s.type, s.group, s.page, s.card_id = "S2", tid, None, 0, None
-            rows = [[Button(g.title, f"type:{tid}:{g.id}:0")] for g in groups]
-            rows.append([self.btn("back", "menu")])
-            reply.messages.append(Message(self.t("S2_groups", section=title), rows))
-            reply.screen = "S2"
-            return
-        if group is not None:
-            cards = [c for c in cards if c.group == group]
-            gtitle = self.content.group_title(group)
-            title = f"{title} — {gtitle}" if gtitle else title
-        pages = max(1, (len(cards) + TOPICS_PER_PAGE - 1) // TOPICS_PER_PAGE)
-        page = max(0, min(page, pages - 1))
-        s.screen, s.type, s.group, s.page, s.card_id = "S2", tid, group, page, None
-        chunk = cards[page * TOPICS_PER_PAGE:(page + 1) * TOPICS_PER_PAGE]
-        rows = [[Button(c.title, f"card:{c.id}")] for c in chunk]
-        nav: List[Button] = []
-        if pages > 1:
-            nav.append(self.btn("more_topics", f"type:{tid}:{group or ''}:{(page + 1) % pages}"))
-        nav.append(self.btn("back", f"type:{tid}" if group is not None and len(groups) > 1 else "menu"))
-        nav.append(self.btn("menu", "menu"))
-        rows.append(nav)
-        reply.messages.append(Message(self.t("S2", section=title), rows))
-        reply.screen = "S2"
+    def section(self, section, page):
+        if section not in self.catalog.settings["sections"] or page not in (0, 1):
+            return self.unknown()
+        cards = [c for c in self.catalog.cards.values() if c["section"] == section]
+        chunk = cards[page * 8 : page * 8 + 8]
+        if not chunk:
+            return self.unknown()
+        buttons = [{"label": c["title"], "action": "card:" + c["id"]} for c in chunk]
+        if len(cards) > 8:
+            buttons.append({"label": "Ещё темы" if page == 0 else "Первые темы", "action": f"section:{section}:{1 - page}"})
+        return screen("S2", self.catalog.settings["sections"][section] + ". Выберите тему:", buttons + [MENU])
 
-    def _show_card(self, s: Session, cid: str, uh: str, reply: Reply) -> None:
-        card = self.content.cards.get(cid)
-        if card is None:  # черновик, снятая версия или неизвестный id — материал не выдаём
-            raise KeyError(f"card {cid} is not published")
-        s.screen, s.type, s.group, s.card_id = "S3", card.type, card.group, cid
-        self.journal.log(J.CARD_VIEW, s.id, uh, card_id=cid, card_version=card.version,
-                         extra={"type": card.type})
-        reply.messages.append(Message(self.render_card(card), self._card_buttons(card)))
-        reply.screen = "S3"
+    def unknown(self):
+        return screen(
+            "S7",
+            "Я отвечаю по темам из меню и ищу по отдельным словам. Целиком вопрос понять не смогу. "
+            "Действий в GK и Inventa бот не выполняет — обратитесь к ревизору.",
+            [MENU, SEARCH],
+        )
 
-    def _card_buttons(self, card: Card) -> List[List[Button]]:
-        return [
-            [self.btn("helped", f"ok:{card.id}"), self.btn("not_helped", f"no:{card.id}")],
-            [self.btn("other_topics", self._topics_data(card)), self.btn("menu", "menu")],
-        ]
+    def unavailable(self, db, now, cid):
+        self.log(db, now, "material_error", topic=cid if cid in self.catalog.cards else None)
+        url = self.catalog.settings["fallback_url"]
+        text = "Не могу открыть материал. "
+        text += "Полная инструкция: " + url if url else "Ссылка на инструкцию ещё не настроена."
+        return screen("S8", text, [HELP, MENU])
 
-    def _topics_data(self, card: Card) -> str:
-        cards = self.content.cards_of_type(card.type)
-        if len(cards) > TOPICS_PER_PAGE and len(self.content.groups_of_type(card.type)) > 1:
-            return f"type:{card.type}:{card.group}:0"
-        return f"type:{card.type}"
+    def respond(self, db, sid, e, now):
+        if e["type"] == "attachment":
+            kind = e.get("attachment_type")
+            self.log(db, now, "attachment", value=kind if kind in ("audio", "image", "file", "video") else "other")
+            return screen("S7", "Работаю с меню и текстовыми словами. Голосовые сообщения, фото и файлы не обрабатываю.")
+        if e["type"] == "message":
+            text = normalized(e["text"])
+            if text in ("меню", "/menu", "/start"):
+                return self.menu()
+            if text in ("спасибо", "ок", "спс", "благодарю"):
+                return screen("S7", "Пожалуйста. Если понадобится что-то ещё — «Меню».")
+            if text in ("поиск", "/search"):
+                return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
+            if text in ("помощь", "/help"):
+                return self.help_menu()
+            if len(text.split()) > 2 or not re.fullmatch(r"[а-яa-z -]{1,60}", text):
+                self.log(db, now, "unknown_input", value="redacted")
+                return self.unknown()
+            matches = self.catalog.search(text)
+            self.log(db, now, "search" if matches else "search_miss", value="matched" if matches else "redacted")
+            if not matches:
+                return screen(
+                    "S5b",
+                    "Ничего не нашёл. Выберите раздел в меню или запросите помощь. "
+                    "Отсутствие ответа отмечено; текст запроса не сохраняется.",
+                    [MENU, HELP],
+                )
+            return screen(
+                "S5a",
+                "Найдены темы:",
+                [{"label": c["title"], "action": "card:" + c["id"]} for c in matches]
+                + [{"label": "Другой запрос", "action": "search"}, MENU],
+            )
+        a = e.get("action", "")
+        if a == "menu":
+            return self.menu()
+        if a == "search":
+            return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
+        if a == "help":
+            return self.help_menu()
+        if a.startswith("help:"):
+            key = a[5:]
+            route = self.catalog.settings["help_routes"].get(key)
+            if not route:
+                return self.unknown()
+            self.log(db, now, "help", value=key)
+            return screen("S6a", route["text"] or "Контакт ещё не настроен. Свяжитесь с ревизором по обычному рабочему каналу.")
+        match = re.fullmatch(r"section:([A-E]):([01])", a)
+        if match:
+            return self.section(match[1], int(match[2]))
+        if a.startswith("card:"):
+            cid = a[5:]
+            card = self.catalog.cards.get(cid)
+            if not card or not card["available"]:
+                return self.unavailable(db, now, cid)
+            old_view = db.execute(
+                "SELECT * FROM views WHERE sid=? AND card=? AND version=?", (sid, cid, card["version"])
+            ).fetchone()
+            view = old_view["id"] if old_view else uuid.uuid4().hex
+            if not old_view:
+                db.execute(
+                    "INSERT INTO views(id,sid,card,version,section,url,created) VALUES(?,?,?,?,?,?,?)",
+                    (view, sid, cid, card["version"], card["section"], card["url"], now),
+                )
+                self.log(db, now, "card", cid, card["version"], interaction=view)
+            body = card["title"] + "\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(card["steps"], 1))
+            body += "\nПодробнее: " + (card["url"] or "ссылка ещё не настроена")
+            if not card["approved"]:
+                body = "ЧЕРНОВИК ДЛЯ ПРОВЕРКИ\n" + body
+            return screen(
+                "S3",
+                body,
+                [
+                    {"label": "Помогло", "action": "rate:" + view + ":yes"},
+                    {"label": "Не помогло", "action": "rate:" + view + ":no"},
+                    {"label": "Другие темы", "action": "section:" + card["section"] + ":0"},
+                    MENU,
+                ],
+                card_id=cid,
+                version=card["version"],
+            )
+        match = re.fullmatch(r"(rate|reason):([0-9a-f]{32}):(yes|no|wrong|details|failed)", a)
+        if match:
+            kind, view, value = match.groups()
+            row = db.execute("SELECT * FROM views WHERE id=? AND sid=?", (view, sid)).fetchone()
+            if not row:
+                return screen("S7", "Эта карточка из другого или завершённого сеанса. Откройте тему заново.")
+            if kind == "rate" and value in ("yes", "no"):
+                if row["rating"] is None:
+                    db.execute("UPDATE views SET rating=? WHERE id=?", (value, view))
+                    self.log(db, now, "rating", row["card"], row["version"], value, interaction=view)
+                elif row["rating"] != value:
+                    return screen("S3a", "Оценка этой карточки уже принята.")
+                if value == "yes":
+                    return screen("S3a", "Понял, спасибо. Если понадобится что-то ещё — «Меню».")
+                if row["reason"] is not None:
+                    return screen("S3a", "Оценка и причина уже приняты.")
+                return screen(
+                    "S4",
+                    "Что не так?",
+                    [{"label": label, "action": f"reason:{view}:{key}"} for key, label in REASONS.items()] + [MENU],
+                )
+            if kind == "reason" and value in REASONS and row["rating"] == "no":
+                if row["reason"] is None:
+                    db.execute("UPDATE views SET reason=? WHERE id=?", (value, view))
+                    self.log(db, now, "reason", row["card"], row["version"], value, interaction=view)
+                text = (
+                    "Записал. "
+                    + ("Полная инструкция: " + row["url"] + ". " if row["url"] else "")
+                    + "Если нужно решить сейчас — запросите помощь."
+                )
+                return screen("S4a", text, [HELP, {"label": "Другие темы", "action": "section:" + row["section"] + ":0"}, MENU])
+        return self.unknown()
 
-    def render_card(self, card: Card) -> str:
-        lines = [card.title]
-        if card.type == "checklist":
-            if card.when:
-                lines.append(self.t("S3_when", when=card.when))
-            if card.prepare:
-                lines.append(self.t("S3_prepare", prepare=card.prepare))
-        steps = self.content.render_steps(card)
-        if len(steps) == 1:
-            lines.append(steps[0])
-        else:
-            lines.extend(f"{i}. {step}" for i, step in enumerate(steps, 1))
-        if card.type == "checklist" and card.result:
-            lines.append(self.t("S3_result", result=card.result))
-        if card.help:
-            lines.append(self.t("S3_help", help=card.help))
-        link = self.content.link_for(card)
-        if link:
-            src = " — ".join(x for x in (card.source.doc, card.source.section) if x)
-            lines.append(self.t("S3_more", link=f"{src} — {link}" if src else link))
-        return "\n".join(lines)
+    def help_menu(self):
+        return screen(
+            "S6",
+            "С чем нужна помощь?",
+            [{"label": v["title"], "action": "help:" + k} for k, v in self.catalog.settings["help_routes"].items()] + [MENU],
+        )
 
-    def _rate(self, s: Session, cid: str, rating: str, uh: str, reply: Reply) -> None:
-        card = self.content.cards.get(cid)
-        s.card_id = cid
-        # каждое нажатие пишется в журнал; в метриках итоговой считается последняя оценка обращения
-        self.journal.log(J.RATING, s.id, uh, card_id=cid, card_version=card.version if card else None, rating=rating)
-        if rating == "helped":
-            s.screen = "S3a"
-            reply.messages.append(Message(self.t("S3a"), [[self.btn("menu", "menu")]]))
-            reply.screen = "S3a"
-        else:
-            s.screen = "S4"
-            topics = self._topics_data(card) if card else "menu"
-            rows = [[self.btn("other_topics", topics), self.btn("help", "help")], [self.btn("menu", "menu")]]
-            reply.messages.append(Message(self.t("S4"), rows))
-            reply.screen = "S4"
+    def metrics(self):
+        with self.connect() as db:
+            self.cleanup(db, time.time())
+            rows = db.execute(
+                "SELECT kind,topic,version,value,COUNT(*) AS count FROM events e WHERE delivered=1 "
+                "AND (kind NOT IN ('rating','reason') OR EXISTS (SELECT 1 FROM events v "
+                "WHERE v.kind='card' AND v.interaction=e.interaction AND v.delivered=1)) "
+                "GROUP BY kind,topic,version,value"
+            ).fetchall()
+        groups = [dict(r) for r in rows]
 
-    def _search(self, s: Session, query: str, uh: str, reply: Reply) -> None:
-        q = query.strip()
-        results = search(self.content, q)
-        if results:
-            s.screen = "S5a"
-            self.journal.log(J.SEARCH, s.id, uh, query=self._safe_text(q), extra={"results": [c.id for c in results]})
-            rows = [[Button(c.title, f"card:{c.id}")] for c in results]
-            rows.append([self.btn("new_search", "search"), self.btn("menu", "menu")])
-            reply.messages.append(Message(self.t("S5a", query=q), rows))
-            reply.screen = "S5a"
-        else:
-            s.screen = "S5b"
-            self.journal.log(J.SEARCH_MISS, s.id, uh, query=self._safe_text(q))
-            reply.messages.append(Message(self.t("S5b", query=q), [[self.btn("menu", "menu"), self.btn("help", "help")]]))
-            reply.screen = "S5b"
+        def count(kind, value=None):
+            return sum(r["count"] for r in groups if r["kind"] == kind and (value is None or r["value"] == value))
 
-    def _help_menu(self, s: Session, reply: Reply) -> None:
-        s.screen = "S6"
-        rows = [[Button(r.button, f"help:{r.key}")] for r in self.content.help_routes]
-        rows.append([self.btn("menu", "menu")])
-        reply.messages.append(Message(self.t("S6"), rows))
-        reply.screen = "S6"
+        views = count("card")
+        rated = count("rating")
+        return dict(
+            groups=groups,
+            card_views=views,
+            ratings=rated,
+            feedback_coverage=rated / views if views else None,
+            helpfulness=count("rating", "yes") / rated if rated else None,
+            note="PI identifiers are not collected. Usage per PI requires an external pilot baseline.",
+        )
 
-    def _help_route(self, s: Session, key: str, uh: str, reply: Reply) -> None:
-        text = self.content.help_text(key)
-        if text is None:
-            self._help_menu(s, reply)
-            return
-        s.screen = "S6a"
-        # card_id заполнен, если помощь запрошена после темы (в т.ч. после «Не помогло»); иначе — помощь без темы
-        self.journal.log(J.HELP_REQUEST, s.id, uh, help_type=key, card_id=s.card_id)
-        reply.messages.append(Message(text, [[self.btn("menu", "menu")]]))
-        reply.screen = "S6a"
+    def delivery_state(self, reply_id):
+        with self.connect() as db:
+            row = db.execute("SELECT sent_count,completed FROM dedup WHERE eid=?", (reply_id,)).fetchone()
+            if row is None:
+                raise ValueError("Delivery expired")
+            return dict(row)
 
-    def _unrecognized(self, s: Session, uh: str, reply: Reply, phrase: Optional[str] = None,
-                      attachment: Optional[str] = None) -> None:
-        s.screen = "S7"
-        if attachment:
-            self.journal.log(J.ATTACHMENT, s.id, uh, extra={"type": attachment})
-            text = self.t("S7_attachment")
-        else:
-            # вопрос без ответа — попадает в журнал для ответственного за содержание (канал сбора вопросов)
-            self.journal.log(J.QUESTION, s.id, uh, query=self._safe_text(phrase or ""), card_id=s.card_id)
-            text = self.t("S7")
-            if any(w in normalize(phrase or "") for w in self.content.action_words):
-                text = self.t("S7_action") + "\n" + text
-        rows = [[self.btn("menu", "menu"), self.btn("help", "help")]]
-        reply.messages.append(Message(text, rows))
-        reply.screen = "S7"
+    def mark_sent(self, reply_id, count):
+        with self.connect() as db:
+            db.execute("UPDATE dedup SET sent_count=MAX(sent_count,?) WHERE eid=?", (count, reply_id))
 
-    def _s8(self, s: Session) -> Message:
-        card = self.content.cards.get(s.card_id) if s.card_id else None
-        s.screen = "S8"
-        return Message(self.t("S8", link=self.content.link_for(card)),
-                       [[self.btn("help", "help"), self.btn("menu", "menu")]])
+    def mark_complete(self, reply_id):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE dedup SET completed=1 WHERE eid=?", (reply_id,))
+            db.execute("UPDATE events SET delivered=1 WHERE delivery=?", (reply_id,))
 
-    # ---------------------------------------------------------------- helpers
-    def t(self, key: str, **kw: object) -> str:
-        text = self.content.texts[key]
-        for k, v in kw.items():
-            text = text.replace("{" + k + "}", str(v))
-        return text
-
-    def btn(self, label_key: str, data: str) -> Button:
-        return Button(self.content.labels.get(label_key, label_key), data)
-
-    def _user_ref(self, user_id: str) -> str:
-        """Идентификатор участника в журнале: как есть (для ручной привязки к ПИ) или хеш."""
-        if self.settings.journal_user_mode == "hash":
-            return J.user_hash(user_id, self.settings.journal_salt)
-        return user_id
-
-    def _safe_text(self, text: str) -> Optional[str]:
-        if not self.settings.log_free_text:
-            return None
-        return text[: self.settings.free_text_max_len]
-
-    @staticmethod
-    def _remember(session: Session, reply: Reply) -> None:
-        if reply.messages:
-            session.last_buttons = reply.messages[-1].flat_buttons()
+    def journal_rows(self, limit=10000):
+        with self.connect() as db:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT time,kind,topic,version,value,delivered FROM events ORDER BY id DESC LIMIT ?", (limit,)
+                )
+            ]

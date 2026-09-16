@@ -1,22 +1,17 @@
-FROM python:3.11-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
-    PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.org/simple}
-
+# Supply a locally available approved image from the corporate registry.
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
+COPY requirements.txt ./
+COPY wheels/ /wheels/
+# Offline build: wheelhouse prepared for the target Linux/Python/architecture.
+RUN python -m pip install --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
 COPY app ./app
 COPY content ./content
 COPY scripts ./scripts
-
-RUN useradd -r -u 10001 bot && mkdir -p /app/data && chown -R bot:bot /app
-USER bot
-VOLUME ["/app/data"]
+RUN mkdir -p /app/data && chown -R 10001:10001 /app
+USER 10001:10001
 EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else 1)"
-
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*'"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready',timeout=3)"
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--limit-concurrency", "32", "--no-access-log"]
