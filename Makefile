@@ -1,4 +1,4 @@
-.PHONY: init demo test validate
+.PHONY: init demo test validate seed
 init:
 	python3 scripts/init_env.py
 demo:
@@ -7,3 +7,5 @@ test:
 	python3 -m pytest -q
 validate:
 	python3 scripts/validate_content.py
+seed:
+	set -a; . ./.env; set +a; python3 scripts/seed_demo.py

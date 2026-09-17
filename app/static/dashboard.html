@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Справочник Аватара — продуктовые метрики</title>
+<link rel="stylesheet" href="/metrics/dashboard.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="x5">X5</span><span class="divider"></span><span class="product">Справочник Аватара · метрики пилота</span></div>
+  <form id="auth" class="auth">
+    <label for="token" class="sr-only">METRICS_TOKEN</label>
+    <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
+    <select id="days" aria-label="Период">
+      <option value="7">7 дней</option>
+      <option value="14">14 дней</option>
+      <option value="30" selected>30 дней</option>
+      <option value="90">90 дней</option>
+    </select>
+    <button type="submit">Обновить</button>
+  </form>
+</header>
+
+<main>
+  <p id="status" class="status" hidden></p>
+
+  <section class="kpis" id="kpis" hidden>
+    <article class="kpi"><h3>Сеансы</h3><p class="value" id="k-sessions">—</p><p class="hint">открытий бота за период</p></article>
+    <article class="kpi"><h3>Обращения</h3><p class="value" id="k-appeals">—</p><p class="hint">показанных карточек · <span id="k-per-session">—</span> на сеанс</p></article>
+    <article class="kpi target"><h3>Охват оценкой</h3><p class="value" id="k-coverage">—</p><p class="hint">цель ≥ 50% · <span id="k-ratings">—</span> оценок</p><div class="bar"><div id="b-coverage"></div><i style="left:50%"></i></div></article>
+    <article class="kpi target"><h3>Полезность</h3><p class="value" id="k-helpfulness">—</p><p class="hint">цель ≥ 70% · «Помогло» / все оценки</p><div class="bar"><div id="b-helpfulness"></div><i style="left:70%"></i></div></article>
+    <article class="kpi"><h3>Запросы помощи</h3><p class="value" id="k-help">—</p><p class="hint"><span id="k-help-share">—</span> от обращений</p></article>
+    <article class="kpi"><h3>Пробелы базы</h3><p class="value" id="k-gaps">—</p><p class="hint"><span id="k-miss">—</span> промахов поиска · <span id="k-unknown">—</span> непонятных фраз</p></article>
+  </section>
+
+  <section class="grid" id="charts" hidden>
+    <article class="panel wide">
+      <h2>Динамика по дням</h2>
+      <div class="legend"><span><i class="c1"></i>сеансы</span><span><i class="c2"></i>обращения</span><span><i class="c3"></i>оценки</span></div>
+      <div id="series" class="chart"></div>
+    </article>
+    <article class="panel">
+      <h2>Обращения по разделам</h2>
+      <div id="sections" class="bars"></div>
+    </article>
+    <article class="panel">
+      <h2>Причины «Не помогло»</h2>
+      <div id="reasons" class="bars"></div>
+      <h2 class="mt">Помощь человека</h2>
+      <div id="help" class="bars"></div>
+    </article>
+    <article class="panel wide">
+      <h2>Топ карточек</h2>
+      <table id="top"><thead><tr><th>ID</th><th>Тема</th><th class="num">Показы</th><th class="num">Оценок</th><th class="num">Полезность</th></tr></thead><tbody></tbody></table>
+    </article>
+    <article class="panel wide">
+      <h2>На доработку <small>карточки с «Не помогло»</small></h2>
+      <table id="gaps"><thead><tr><th>ID</th><th>Тема</th><th class="num">Не помогло</th><th class="num">Показы</th><th>Причины</th></tr></thead><tbody></tbody></table>
+      <p id="gaps-empty" class="empty" hidden>Отрицательных оценок за период нет.</p>
+    </article>
+    <article class="panel wide ops">
+      <h2>Техника</h2>
+      <div class="ops-row">
+        <span>Ошибки выдачи: <b id="o-errors">—</b></span>
+        <span>Просроченных доставок: <b id="o-expired">—</b></span>
+        <span>В очереди: <b id="o-pending">—</b></span>
+        <span>Вложений: <b id="o-attachments">—</b></span>
+        <span>Режим: <b id="o-mode">—</b></span>
+      </div>
+      <p class="note" id="note"></p>
+    </article>
+  </section>
+</main>
+<footer>Персональные данные и содержание ПИ в журнале отсутствуют. Использование на одну ПИ, отвлечения ревизора и качество ПИ считаются вручную на пилоте.</footer>
+<script src="/metrics/dashboard.js"></script>
+</body>
+</html>

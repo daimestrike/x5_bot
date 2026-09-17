@@ -19,6 +19,7 @@ from .config import Settings
 from .content import Catalog
 from .delivery import Delivery, QueueFull
 from .engine import Engine, validate_event
+from .metrics import product_metrics
 from .transports.rooms import RoomsClient, parse_update, verify_token
 
 STATIC = Path(__file__).parent / "static"
@@ -242,6 +243,28 @@ def create_app(settings=None):
     async def metrics(request: Request):
         authorize(request, admin=True)
         return {**engine.metrics(), "delivery": delivery.stats()}
+
+    @app.get("/metrics/product")
+    async def metrics_product(request: Request):
+        authorize(request, admin=True)
+        try:
+            days = int(request.query_params.get("days", "30"))
+        except ValueError:
+            raise HTTPException(400, "bad_days") from None
+        return {**product_metrics(engine, days), "delivery": delivery.stats(), "mode": settings.mode}
+
+    # Страница дашборда: статический HTML без данных; данные запрашивает JS по METRICS_TOKEN.
+    @app.get("/metrics/dashboard")
+    async def dashboard():
+        return FileResponse(STATIC / "dashboard.html")
+
+    @app.get("/metrics/dashboard.js")
+    async def dashboard_js():
+        return FileResponse(STATIC / "dashboard.js", media_type="text/javascript")
+
+    @app.get("/metrics/dashboard.css")
+    async def dashboard_css():
+        return FileResponse(STATIC / "dashboard.css", media_type="text/css")
 
     @app.get("/metrics/journal.csv")
     async def journal_csv(request: Request):
