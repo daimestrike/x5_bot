@@ -1,10 +1,9 @@
 /* Страница «Содержание»: дополняет dashboard.css */
-.hero.compact{padding:40px 0 22px}
+.page-head.compact{padding-top:28px}
 .auth .who{width:190px;background:#fff}
 .tabs .count{display:inline-block;min-width:22px;padding:0 7px;margin-left:6px;border-radius:999px;background:var(--green-soft);color:var(--green-deep);font-size:12px;line-height:20px;text-align:center}
 .tabs button.active .count{background:rgba(255,255,255,.2);color:#fff}
 .modeline{margin:0 0 16px;font-size:13px;color:var(--ink-3)}
-.crumbs a{color:var(--green);font-weight:600}
 
 /* очередь */
 .queue{display:grid;gap:14px}

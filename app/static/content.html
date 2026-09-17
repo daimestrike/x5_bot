@@ -10,11 +10,8 @@
 <body>
 <header class="topbar">
   <div class="wrap topbar-in">
-    <a class="logo" href="/content/" aria-label="X5 Group">
-      <svg viewBox="0 0 64 32" width="64" height="32" aria-hidden="true"><rect width="64" height="32" rx="6" fill="#5FB233"/><text x="32" y="22" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="19" fill="#fff">X5</text></svg>
-      <span>Tech</span>
-    </a>
-    <nav class="crumbs"><span>Справочник Аватара</span><span class="sep">/</span><span>Содержание</span><span class="sep">·</span><a href="/metrics/dashboard">Метрики</a></nav>
+    <a class="logo" href="/dev/chat" aria-label="Справочник Аватара"><span class="brand-mark" aria-hidden="true">X5</span><span>Справочник Аватара</span></a>
+    <nav class="page-nav" aria-label="Страницы проекта"><a href="/dev/chat">Диалог</a><a href="/metrics/dashboard">Метрики</a><a class="active" href="/content/" aria-current="page">Содержание</a></nav>
     <form id="auth" class="auth">
       <label for="token" class="sr-only">METRICS_TOKEN</label>
       <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
@@ -25,11 +22,10 @@
   </div>
 </header>
 
-<section class="hero compact">
+<section class="page-head compact">
   <div class="wrap">
-    <p class="eyebrow">Удалённая инвентаризация · бот в Rooms</p>
-    <h1>Содержание бота</h1>
-    <p class="lead">Карточки, их источники и очередь на проверку. В бот попадает только утверждённый текст: изменения документов и правки карточек проходят через владельца содержания и проверяющего.</p>
+    <h1>Содержание</h1>
+    <p class="lead">Карточки, источники и изменения, которые ждут проверки.</p>
     <div class="chips tabs" id="tabs" role="tablist">
       <button type="button" data-tab="queue" class="active">Очередь <span class="count" id="c-queue">0</span></button>
       <button type="button" data-tab="cards">Карточки <span class="count" id="c-cards">0</span></button>

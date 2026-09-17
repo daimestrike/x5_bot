@@ -190,6 +190,15 @@ def test_no_secret_file_served(client):
         assert client.get(path).status_code == 404
 
 
+def test_all_admin_pages_have_navigation(client):
+    pages = [client.get("/dev/chat"), client.get("/metrics/dashboard"), client.get("/content/")]
+    for response in pages:
+        assert response.status_code == 200
+        assert 'href="/dev/chat"' in response.text
+        assert 'href="/metrics/dashboard"' in response.text
+        assert 'href="/content/"' in response.text
+
+
 def test_production_rejects_public_demo_secrets(settings, tmp_path):
     from test_api import production_settings
 

@@ -9,11 +9,8 @@
 <body>
 <header class="topbar">
   <div class="wrap topbar-in">
-    <a class="logo" href="/metrics/dashboard" aria-label="X5 Group">
-      <svg viewBox="0 0 64 32" width="64" height="32" aria-hidden="true"><rect width="64" height="32" rx="6" fill="#5FB233"/><text x="32" y="22" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="19" fill="#fff">X5</text></svg>
-      <span>Tech</span>
-    </a>
-    <nav class="crumbs"><span>Справочник Аватара</span><span class="sep">/</span><span>Метрики пилота</span><span class="sep">·</span><a href="/content/">Содержание</a></nav>
+    <a class="logo" href="/dev/chat" aria-label="Справочник Аватара"><span class="brand-mark" aria-hidden="true">X5</span><span>Справочник Аватара</span></a>
+    <nav class="page-nav" aria-label="Страницы проекта"><a href="/dev/chat">Диалог</a><a class="active" href="/metrics/dashboard" aria-current="page">Метрики</a><a href="/content/">Содержание</a></nav>
     <form id="auth" class="auth">
       <label for="token" class="sr-only">METRICS_TOKEN</label>
       <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
@@ -22,11 +19,10 @@
   </div>
 </header>
 
-<section class="hero">
+<section class="page-head">
   <div class="wrap">
-    <p class="eyebrow">Удалённая инвентаризация · бот в Rooms</p>
     <h1>Метрики пилота</h1>
-    <p class="lead">Пользуются ли Аватары справочником, помогают ли ответы и какие темы нужно доработать. Всё считается по обезличенному журналу бота.</p>
+    <p class="lead">Использование справочника, полезность ответов и темы, которые нужно доработать.</p>
     <div class="chips" id="days" role="tablist" aria-label="Период">
       <button type="button" data-days="7">7 дней</button>
       <button type="button" data-days="14">14 дней</button>
