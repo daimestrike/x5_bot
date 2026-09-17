@@ -19,6 +19,12 @@ allowed_files = {
     "Makefile",
     "pytest.ini",
     "ruff.toml",
+    "install.py",
+    "run.py",
+    "setup.sh",
+    "start.sh",
+    "setup.cmd",
+    "start.cmd",
 }
 with ZipFile(root / "dist/rooms-bot.zip", "w", ZIP_DEFLATED) as archive:
     for path in sorted(root.rglob("*")):
