@@ -148,6 +148,14 @@
     }
   }
 
+  // Подсказки «i» на KPI: текст из data-info, показывается по наведению/фокусу.
+  document.querySelectorAll('.kpi[data-info]').forEach((k) => {
+    const tip = document.createElement('span');
+    tip.className = 'info';
+    tip.textContent = k.dataset.info;
+    k.tabIndex = 0;
+    k.appendChild(tip);
+  });
   $('auth').addEventListener('submit', (e) => { e.preventDefault(); load(); });
   $('days').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-days]');
