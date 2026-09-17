@@ -42,11 +42,14 @@
     items.forEach((it) => {
       const el = document.createElement('article');
       el.className = 'qi';
-      const where = [it.source_title || it.source, 'версия ' + it.source_version, it.page ? 'стр. ' + it.page : null, it.unit ? 'фрагмент ' + it.unit : null].filter(Boolean).join(' · ');
+      const where = [it.source_title || it.source, 'версия ' + it.source_version, (it.section || []).join(' / '), it.page ? 'стр. ' + it.page : null, it.unit ? 'фрагмент ' + it.unit : null].filter(Boolean).join(' · ');
       const kind = { changed: 'изменён', added: 'добавлен', removed: 'удалён' }[it.change] || it.change;
+      const confidence = {high: 'Сильная связь', medium: 'Возможная связь', ambiguous: 'Несколько кандидатов'}[it.confidence] || 'Возможная связь';
       el.innerHTML = `
         <div class="qi-head"><span class="tag ${esc(it.change)}">${kind}</span><span>${esc(where)}</span><span>${fmt(it.created)}</span></div>
-        <div class="qi-card ${it.card_id ? '' : 'none'}">${it.card_id ? `<span class="id">${esc(it.card_id)}</span>${esc(cardTitle(it.card_id))} <span class="score">совпадение ${Math.round((it.score || 0) * 100)}%</span>` : 'Карточка не найдена — возможно, нужна новая тема или изменение к боту не относится'}</div>
+        <div class="qi-card ${it.card_id ? '' : 'none'}">${it.card_id ? `<span class="id">${esc(it.card_id)}</span>${esc(cardTitle(it.card_id))} <span class="score">${confidence}</span>` : 'Карточка не найдена — возможно, нужна новая тема или изменение к боту не относится'}</div>
+        ${(it.reasons || []).length ? `<p class="note">${it.reasons.map(esc).join(' · ')}</p>` : ''}
+        ${it.context_changed ? `<p class="note">Раздел изменился: ${esc((it.old_section || []).join(' / ') || 'без заголовка')} → ${esc((it.section || []).join(' / ') || 'без заголовка')}</p>` : ''}
         <div class="diff">${diffHtml(it.diff)}</div>
         <div class="qi-actions">
           <input placeholder="Комментарий (необязательно)" data-note>
@@ -103,7 +106,7 @@
     tb.replaceChildren();
     $('sources-empty').hidden = state.sources.length > 0;
     state.sources.forEach((s) => {
-      const refs = state.cards.filter((c) => c.source_key === s.key).length;
+      const refs = s.linked_cards == null ? '—' : s.linked_cards;
       const tr = document.createElement('tr');
       tr.innerHTML = `<td class="id">${esc(s.key)}</td><td>${esc(s.title)}</td><td class="muted">${esc(s.filename)}</td><td class="num">${s.version}</td><td class="num">${s.units_count}</td><td class="muted">${fmt(s.uploaded)}</td><td class="num">${refs}</td>`;
       tb.appendChild(tr);
@@ -121,8 +124,8 @@
       const q = new URLSearchParams({ key, title: $('src-title').value.trim(), filename: file.name });
       const r = await api('/content/api/sources/upload?' + q, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await file.arrayBuffer() });
       $('upload-result').textContent = r.first_upload
-        ? `Создан слепок «${r.source.title}» (версия 1, ${r.source.units_count} фрагментов). Следующая загрузка будет сравниваться с ним.`
-        : r.changes === 0 ? 'Документ не изменился — слепок прежний.'
+        ? `Создан слепок «${r.source.title}» (версия 1, ${r.source.units_count} фрагментов). Автоматически найдены связи с ${r.source.linked_cards} карточками. Следующая загрузка будет сравниваться с ним.`
+        : r.changes === 0 ? `Изменений текста и разделов нет. Связи проверены: ${r.source.linked_cards} карточек.`
         : `Версия ${r.source.version}: изменено фрагментов — ${r.changes}, в очередь добавлено — ${r.queued}. Откройте вкладку «Очередь».`;
       $('src-file').value = '';
       await load();

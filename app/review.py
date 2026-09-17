@@ -140,7 +140,7 @@ def source_change_items(source, changes, cards, match):
     """Изменения документа -> элементы очереди: по одному на карточку, плюс «без карточки» для остального."""
     items = []
     for ch in changes:
-        matched = match(ch, cards, source["key"])
+        matched = ch['matches'] if 'matches' in ch else match(ch, cards, source["key"])
         base = {
             "kind": "source_changed",
             "source": source["key"],
@@ -152,10 +152,15 @@ def source_change_items(source, changes, cards, match):
             "old": (ch.get("old") or {}).get("text"),
             "new": (ch.get("new") or {}).get("text"),
             "diff": ch["diff"],
+            "section": (ch.get('new') or ch.get('old') or {}).get('section', []),
+            "old_section": (ch.get('old') or {}).get('section', []),
+            "context_changed": ch.get('context_changed', False),
+            "unit_id": (ch.get('new') or ch.get('old') or {}).get('uid'),
         }
         if matched:
             for m in matched:
-                items.append({**base, "card_id": m["id"], "score": m["score"]})
+                items.append({**base, "card_id": m["id"], "score": m["score"],
+                              "confidence": m.get('confidence', 'medium'), "reasons": m.get('reasons', [])})
         else:
             items.append({**base, "card_id": None, "score": None})
     return items

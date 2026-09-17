@@ -319,13 +319,14 @@ def create_app(settings=None):
         filename = request.query_params.get("filename", "")
         data = await request.body()
         try:
-            snap, changes = sources.snapshot(key, title, filename, data)
+            snap, changes = sources.snapshot(key, title, filename, data, engine.catalog.cards)
         except SourceError as e:
             review_error(e)
         items = []
         if changes:
             items = store.enqueue(source_change_items(snap, changes, engine.catalog.cards, match_cards))
-        return {"source": {k: snap[k] for k in ("key", "title", "filename", "version", "units_count", "uploaded")},
+        return {"source": {k: snap[k] for k in ("key", "title", "filename", "version", "units_count", "uploaded",
+                                              "linked_units", "linked_cards")},
                 "changes": len(changes or []), "queued": len(items), "first_upload": changes is None}
 
     @app.post("/content/api/queue/resolve")
