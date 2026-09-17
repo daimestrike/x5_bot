@@ -17,6 +17,7 @@ WELCOME = (
 )
 MENU = {"label": "Меню", "action": "menu"}
 SEARCH = {"label": "Поиск", "action": "search"}
+HELP = {"label": "Помощь человека", "action": "help"}
 REASONS = {"wrong": "Не то, что искал", "details": "Не хватает деталей", "failed": "Сделал, не сработало"}
 
 
@@ -185,7 +186,7 @@ class Engine:
             "S1",
             "Что нужно?",
             [{"label": name, "action": "section:" + key + ":0"} for key, name in self.catalog.settings["sections"].items()]
-            + [SEARCH],
+            + [SEARCH, HELP],
         )
 
     def section(self, section, page):
@@ -208,13 +209,21 @@ class Engine:
             [MENU, SEARCH],
         )
 
+    def help(self, topic=None):
+        suffix = ":" + topic if topic else ""
+        buttons = [
+            {"label": route["title"], "action": "help:" + key + suffix}
+            for key, route in self.catalog.settings["help_routes"].items()
+        ]
+        return screen("S6", "С чем нужна помощь?", buttons + [MENU])
+
     def unavailable(self, db, now, cid):
         self.log(db, now, "material_error", topic=cid if cid in self.catalog.cards else None)
         url = self.catalog.settings["fallback_url"]
         text = "Не могу открыть материал. "
         text += "Полная инструкция: " + url if url else "Ссылка на инструкцию ещё не настроена."
-        text += " Если нужно срочно — обратитесь к ревизору."
-        return screen("S8", text, [MENU])
+        text += " Если нужно срочно — запросите помощь."
+        return screen("S8", text, [HELP, MENU])
 
     def respond(self, db, sid, e, now):
         if e["type"] == "attachment":
@@ -229,6 +238,8 @@ class Engine:
                 return screen("S7", "Пожалуйста. Если понадобится что-то ещё — «Меню».")
             if text in ("поиск", "/search"):
                 return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
+            if text in ("помощь", "помощь человека", "/help"):
+                return self.help()
             if len(text.split()) > 2 or not re.fullmatch(r"[а-яa-z -]{1,60}", text):
                 self.log(db, now, "unknown_input", value="redacted")
                 return self.unknown()
@@ -239,7 +250,7 @@ class Engine:
                     "S5b",
                     "Ничего не нашёл. Выберите раздел в меню или спросите ревизора. "
                     "Отсутствие ответа отмечено; текст запроса не сохраняется.",
-                    [MENU, SEARCH],
+                    [MENU, HELP],
                 )
             return screen(
                 "S5a",
@@ -252,6 +263,20 @@ class Engine:
             return self.menu()
         if a == "search":
             return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
+        if a == "help":
+            return self.help()
+        match = re.fullmatch(r"help_for:([A-E]-\d{2})", a)
+        if match:
+            return self.help(match[1])
+        match = re.fullmatch(r"help:(pi|tech|org)(?::([A-E]-\d{2}))?", a)
+        if match:
+            key, topic = match.groups()
+            route = self.catalog.settings["help_routes"].get(key)
+            if not route:
+                return self.unknown()
+            self.log(db, now, "help", topic=topic, value=key)
+            text = route["text"].strip() or "Контакт ещё не настроен. Свяжитесь с ревизором по обычному рабочему каналу."
+            return screen("S6a", text, [MENU])
         match = re.fullmatch(r"section:([A-E]):([01])", a)
         if match:
             return self.section(match[1], int(match[2]))
@@ -314,9 +339,17 @@ class Engine:
                 text = (
                     "Записал. "
                     + ("Полная инструкция: " + row["url"] + ". " if row["url"] else "")
-                    + "Если нужно решить сейчас — спросите ревизора голосом."
+                    + "Если нужно решить сейчас — запросите помощь."
                 )
-                return screen("S4a", text, [{"label": "Другие темы", "action": "section:" + row["section"] + ":0"}, MENU])
+                return screen(
+                    "S4a",
+                    text,
+                    [
+                        {"label": "Помощь человека", "action": "help_for:" + row["card"]},
+                        {"label": "Другие темы", "action": "section:" + row["section"] + ":0"},
+                        MENU,
+                    ],
+                )
         return self.unknown()
 
     def metrics(self):

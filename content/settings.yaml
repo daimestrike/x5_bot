@@ -4,6 +4,19 @@ sections:
   C: Как снимать
   D: Порядок и после ПИ
   E: Этапы ПИ — справка
+help_routes:
+  pi:
+    title: Вопрос по ПИ
+    text: ''
+    owner: ''
+  tech:
+    title: Не работает техника
+    text: ''
+    owner: ''
+  org:
+    title: Организационный вопрос
+    text: ''
+    owner: ''
 fallback_url: ''
 allowed_link_hosts: []
 channel_approved: false

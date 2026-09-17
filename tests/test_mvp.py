@@ -33,6 +33,7 @@ def test_s1_exact_menu(engine, event):
         "Порядок и после ПИ",
         "Этапы ПИ — справка",
         "Поиск",
+        "Помощь человека",
     ]
 
 
@@ -100,7 +101,7 @@ def test_s4_and_s4a_three_reasons(engine, event):
         n["user_id"] = key
         response = engine.handle(n)
         assert last(response)["screen"] == "S4a"
-        assert "menu" in actions(response) and "help" not in actions(response)
+        assert "menu" in actions(response) and any(a.startswith("help_for:") for a in actions(response))
     assert {r["value"] for r in engine.journal_rows() if r["kind"] == "reason"} == {"wrong", "details", "failed"}
 
 
@@ -134,13 +135,33 @@ def test_no_gk_actions(engine, event):
     assert last(r)["screen"] == "S7"
 
 
-def test_no_human_help_and_unavailable(engine, event):
-    assert last(engine.handle(event(action="help")))["screen"] == "S7"  # маршрут помощи убран из MVP
-    assert last(engine.handle(event(action="help:tech")))["screen"] == "S7"
-    assert "help" not in actions(engine.handle(event(action="menu")))
-    assert last(engine.handle(event(action="card:Z-99")))["screen"] == "S8"
+def test_human_help_and_unavailable(engine, event):
+    menu = engine.handle(event(action="menu"))
+    assert "help" in actions(menu)
+    help_screen = engine.handle(event(action="help"))
+    assert last(help_screen)["screen"] == "S6"
+    assert {a for a in actions(help_screen) if a.startswith("help:")} == {"help:pi", "help:tech", "help:org"}
+    route = engine.handle(event(action="help:tech"))
+    assert last(route)["screen"] == "S6a"
+    assert engine.journal_rows()[0]["kind"] == "help"
+    unavailable = engine.handle(event(action="card:Z-99"))
+    assert last(unavailable)["screen"] == "S8" and "help" in actions(unavailable)
     engine.catalog.cards["B-07"]["available"] = False
     assert last(engine.handle(event(action="card:B-07")))["screen"] == "S8"
+
+
+def test_help_after_negative_rating_keeps_topic(engine, event):
+    card = engine.handle(event(action="card:A-07"))
+    no = next(a for a in actions(card) if a.endswith(":no"))
+    reasons = engine.handle(event(action=no))
+    detail = next(a for a in actions(reasons) if a.endswith(":details"))
+    response = engine.handle(event(action=detail))
+    help_for = next(a for a in actions(response) if a.startswith("help_for:"))
+    choices = engine.handle(event(action=help_for))
+    tech = next(a for a in actions(choices) if a.startswith("help:tech:"))
+    assert last(engine.handle(event(action=tech)))["screen"] == "S6a"
+    row = next(r for r in engine.journal_rows() if r["kind"] == "help")
+    assert row["topic"] == "A-07" and row["value"] == "tech"
 
 
 def test_close_and_expiry_no_messages(engine, event):

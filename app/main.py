@@ -193,7 +193,7 @@ def create_app(settings=None):
                 "status_message": "Справочник Аватара",
                 "commands": [
                     {"body": cmd, "name": label, "description": label}
-                    for cmd, label in [("/menu", "Меню"), ("/search", "Поиск")]
+                    for cmd, label in [("/menu", "Меню"), ("/search", "Поиск"), ("/help", "Помощь человека")]
                 ],
             },
         }

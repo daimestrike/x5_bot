@@ -156,7 +156,7 @@ def test_native_jwt_status_privacy(settings, tmp_path):
             assert c.post("/command", json=e, headers=signed(settings, **changes)).status_code == 401
         assert c.post("/command", json=e, headers=signed(settings)).status_code == 202
         r = c.get("/status", params={"bot_id": settings.rooms_bot_id}, headers=signed(settings))
-        assert [x["body"] for x in r.json()["result"]["commands"]] == ["/menu", "/search"]
+        assert [x["body"] for x in r.json()["result"]["commands"]] == ["/menu", "/search", "/help"]
         with app.state.engine.connect() as db:
             dump = "\n".join(db.iterdump())
         for private in [e["from"]["user_huid"], e["from"]["group_chat_id"], "Private employee", "secret-inventory-text"]:
