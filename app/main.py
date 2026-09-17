@@ -20,6 +20,8 @@ from .content import Catalog
 from .delivery import Delivery, QueueFull
 from .engine import Engine, validate_event
 from .metrics import product_metrics
+from .review import ContentStore, ReviewError, source_change_items
+from .sources import MAX_DOC_BYTES, SourceError, SourceStore, match_cards
 from .transports.rooms import RoomsClient, parse_update, verify_token
 
 STATIC = Path(__file__).parent / "static"
@@ -36,14 +38,15 @@ class BodyLimit:
         if scope["type"] != "http" or scope["method"] != "POST":
             return await self.app(scope, receive, send)
         chunks, size = [], 0
+        limit = MAX_DOC_BYTES if scope["path"] == "/content/api/sources/upload" else 16384
         try:
             while True:
-                message = await asyncio.wait_for(receive(), 2)
+                message = await asyncio.wait_for(receive(), 10 if limit > 16384 else 2)
                 if message["type"] == "http.disconnect":
                     return
                 chunk = message.get("body", b"")
                 size += len(chunk)
-                if size > 16384:
+                if size > limit:
                     return await JSONResponse({"error": "body_too_large"}, status_code=413)(scope, receive, send)
                 chunks.append(chunk)
                 if not message.get("more_body", False):
@@ -252,6 +255,111 @@ def create_app(settings=None):
         except ValueError:
             raise HTTPException(400, "bad_days") from None
         return {**product_metrics(engine, days), "delivery": delivery.stats(), "mode": settings.mode}
+
+    # ------------------------------------------------------------------ содержание
+    store = ContentStore(settings.content_dir)
+    sources = SourceStore(settings.content_dir)
+
+    def reload_catalog():
+        """Перечитать карточки. В production бот остаётся на прежней версии, пока новая не утверждена."""
+        try:
+            engine.catalog = Catalog(settings.content_dir, production=settings.mode == "production")
+            return True
+        except (ValueError, KeyError, TypeError) as e:
+            LOG.warning("content_not_reloaded: %s", e)
+            return False
+
+    def review_error(e):
+        raise HTTPException(400, str(e)) from None
+
+    @app.get("/content/")
+    async def content_page():
+        return FileResponse(STATIC / "content.html")
+
+    @app.get("/content/app.js")
+    async def content_js():
+        return FileResponse(STATIC / "content.js", media_type="text/javascript")
+
+    @app.get("/content/app.css")
+    async def content_css():
+        return FileResponse(STATIC / "content.css", media_type="text/css")
+
+    @app.get("/content/api/state")
+    async def content_state(request: Request):
+        authorize(request, admin=True)
+        cards = store.read_cards()
+        live = {c["id"]: c for c in engine.catalog.cards.values()}
+        return {
+            "mode": settings.mode,
+            "sections": engine.catalog.settings["sections"],
+            "cards": [
+                {k: c.get(k) for k in ("id", "section", "title", "version", "date", "status", "approved", "owner", "url",
+                                       "source", "source_key", "available", "edited_by", "approved_at")}
+                | {"live_version": live.get(c["id"], {}).get("version"), "history": len(c.get("history", []))}
+                for c in cards
+            ],
+            "sources": sources.list(),
+            "queue": store.open_items(),
+            "resolved": [i for i in store.read_queue() if i["status"] != "open"][-50:],
+        }
+
+    @app.get("/content/api/cards/{card_id}")
+    async def content_card(card_id: str, request: Request):
+        authorize(request, admin=True)
+        card = next((c for c in store.read_cards() if c["id"] == card_id), None)
+        if card is None:
+            raise HTTPException(404, "no_card")
+        return card
+
+    @app.post("/content/api/sources/upload")
+    async def content_upload(request: Request):
+        authorize(request, admin=True)
+        key = request.query_params.get("key", "")
+        title = request.query_params.get("title", "")
+        filename = request.query_params.get("filename", "")
+        data = await request.body()
+        try:
+            snap, changes = sources.snapshot(key, title, filename, data)
+        except SourceError as e:
+            review_error(e)
+        items = []
+        if changes:
+            items = store.enqueue(source_change_items(snap, changes, engine.catalog.cards, match_cards))
+        return {"source": {k: snap[k] for k in ("key", "title", "filename", "version", "units_count", "uploaded")},
+                "changes": len(changes or []), "queued": len(items), "first_upload": changes is None}
+
+    @app.post("/content/api/queue/resolve")
+    async def content_resolve(request: Request):
+        authorize(request, admin=True)
+        body = await request.json()
+        try:
+            return store.resolve(str(body.get("id", "")), str(body.get("decision", "")), str(body.get("who", ""))[:100],
+                                 str(body.get("note", "")))
+        except ReviewError as e:
+            review_error(e)
+
+    @app.post("/content/api/cards/update")
+    async def content_update(request: Request):
+        authorize(request, admin=True)
+        body = await request.json()
+        fields = body.get("fields")
+        if not isinstance(fields, dict):
+            raise HTTPException(400, "fields_required")
+        try:
+            card = store.update_card(str(body.get("id", "")), fields, str(body.get("editor", ""))[:100])
+        except ReviewError as e:
+            review_error(e)
+        return {"card": card, "reloaded": reload_catalog()}
+
+    @app.post("/content/api/cards/approve")
+    async def content_approve(request: Request):
+        authorize(request, admin=True)
+        body = await request.json()
+        try:
+            card = store.approve(str(body.get("id", "")), str(body.get("reviewer", ""))[:100], bool(body.get("approved", True)))
+        except ReviewError as e:
+            review_error(e)
+        return {"card": card, "reloaded": reload_catalog()}
 
     # Страница дашборда: статический HTML без данных; данные запрашивает JS по METRICS_TOKEN.
     @app.get("/metrics/dashboard")

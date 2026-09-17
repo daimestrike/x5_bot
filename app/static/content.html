@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Справочник Аватара — содержание</title>
+<link rel="stylesheet" href="/metrics/dashboard.css">
+<link rel="stylesheet" href="/content/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="logo" href="/content/" aria-label="X5 Group">
+      <svg viewBox="0 0 64 32" width="64" height="32" aria-hidden="true"><rect width="64" height="32" rx="6" fill="#5FB233"/><text x="32" y="22" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="19" fill="#fff">X5</text></svg>
+      <span>Tech</span>
+    </a>
+    <nav class="crumbs"><span>Справочник Аватара</span><span class="sep">/</span><span>Содержание</span><span class="sep">·</span><a href="/metrics/dashboard">Метрики</a></nav>
+    <form id="auth" class="auth">
+      <label for="token" class="sr-only">METRICS_TOKEN</label>
+      <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
+      <label for="who" class="sr-only">Ваше имя</label>
+      <input id="who" type="text" placeholder="Кто работает (ФИО)" autocomplete="off" class="who">
+      <button type="submit">Открыть</button>
+    </form>
+  </div>
+</header>
+
+<section class="hero compact">
+  <div class="wrap">
+    <p class="eyebrow">Удалённая инвентаризация · бот в Rooms</p>
+    <h1>Содержание бота</h1>
+    <p class="lead">Карточки, их источники и очередь на проверку. В бот попадает только утверждённый текст: изменения документов и правки карточек проходят через владельца содержания и проверяющего.</p>
+    <div class="chips tabs" id="tabs" role="tablist">
+      <button type="button" data-tab="queue" class="active">Очередь <span class="count" id="c-queue">0</span></button>
+      <button type="button" data-tab="cards">Карточки <span class="count" id="c-cards">0</span></button>
+      <button type="button" data-tab="sources">Источники <span class="count" id="c-sources">0</span></button>
+    </div>
+  </div>
+</section>
+
+<main class="wrap">
+  <p id="status" class="status" hidden></p>
+  <p id="mode" class="modeline" hidden></p>
+
+  <section id="tab-queue" class="tab">
+    <div class="block">
+      <div class="block-head"><h2>Ждут решения</h2><span class="sub">изменения источников, сопоставленные с карточками</span></div>
+      <p class="desc">Каждая строка — фрагмент документа, который изменился, и карточка, которой это, вероятно, касается. Прочитайте «было / стало», откройте карточку и решите: текст актуален (подтвердить), нужно поправить (открыть редактор) или изменение к боту не относится (отклонить). Ничего не меняется в боте, пока вы не нажмёте.</p>
+      <div id="queue" class="queue"></div>
+      <p id="queue-empty" class="empty" hidden>Очередь пуста — все изменения разобраны.</p>
+    </div>
+    <div class="block">
+      <div class="block-head"><h2>Недавно разобрано</h2></div>
+      <div class="tablewrap"><table id="resolved"><thead><tr><th>Когда</th><th>Источник</th><th>Карточка</th><th>Решение</th><th>Кто</th><th>Комментарий</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="tab-cards" class="tab" hidden>
+    <div class="block">
+      <div class="block-head"><h2>Карточки</h2><span class="sub"><b id="c-approved">0</b> утверждено · <b id="c-drafts">0</b> ждут утверждения</span></div>
+      <p class="desc">Версия меняется при каждой правке текста; оценки в журнале привязаны к версии. «В боте» — версия, которую сейчас выдаёт бот: в production она отстаёт от файла, пока новая версия не утверждена. Утверждение — с фамилией проверяющего.</p>
+      <div class="filters"><input id="card-filter" type="search" placeholder="Поиск по ID или названию"><label><input type="checkbox" id="only-drafts"> только неутверждённые</label></div>
+      <div class="tablewrap"><table id="cards"><thead><tr><th>ID</th><th>Тема</th><th>Источник</th><th class="num">Версия</th><th class="num">В боте</th><th>Дата</th><th>Статус</th><th>Утвердил</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="tab-sources" class="tab" hidden>
+    <div class="block">
+      <div class="block-head"><h2>Загрузить версию документа</h2></div>
+      <p class="desc">Загрузите новую версию инструкции, памятки или чек-листа (.docx, .txt, .md; PDF — если установлен pypdf). Бот сохраняет только слепок текста по абзацам, сам файл не хранит. Первая загрузка создаёт слепок; каждая следующая сравнивается с предыдущим: изменённые абзацы попадают в очередь вместе с карточками, которые они затрагивают.</p>
+      <form id="upload" class="upload">
+        <select id="src-key" aria-label="Документ">
+          <option value="instruction">instruction — Инструкция по оборудованию и Румс</option>
+          <option value="memo">memo — Памятка по этапам видеофиксации</option>
+          <option value="infographic">infographic — Инфографика с техническими нюансами</option>
+          <option value="checklist">checklist — Чек-лист ревизора</option>
+          <option value="other">другой ключ…</option>
+        </select>
+        <input id="src-custom" type="text" placeholder="ключ латиницей" hidden>
+        <input id="src-title" type="text" placeholder="Название (необязательно)">
+        <input id="src-file" type="file" accept=".docx,.txt,.md,.pdf" required>
+        <button type="submit">Загрузить и сравнить</button>
+      </form>
+      <p id="upload-result" class="note"></p>
+    </div>
+    <div class="block">
+      <div class="block-head"><h2>Слепки источников</h2></div>
+      <div class="tablewrap"><table id="sources"><thead><tr><th>Ключ</th><th>Название</th><th>Файл</th><th class="num">Версия</th><th class="num">Фрагментов</th><th>Загружен</th><th>Карточек ссылается</th></tr></thead><tbody></tbody></table></div>
+      <p id="sources-empty" class="empty" hidden>Слепков ещё нет — загрузите текущие версии документов, чтобы было с чем сравнивать.</p>
+    </div>
+  </section>
+</main>
+
+<!-- редактор карточки -->
+<div id="editor" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h2 id="ed-title">Карточка</h2><button type="button" id="ed-close" class="x" aria-label="Закрыть">×</button></div>
+    <div id="ed-context" class="ed-context" hidden></div>
+    <form id="ed-form">
+      <label>Заголовок (вопрос Аватара, до 60 знаков)<input id="ed-heading" maxlength="60" required></label>
+      <label>Шаги — по одному на строку, до 6, суммарно до 600 знаков<textarea id="ed-steps" rows="7" required></textarea></label>
+      <label>Синонимы для поиска, через запятую (не меньше 3)<input id="ed-synonyms" required></label>
+      <div class="two"><label>Источник (документ, страница)<input id="ed-source"></label><label>Ссылка на полный документ<input id="ed-url" type="url" placeholder="https://…"></label></div>
+      <p class="note" id="ed-meta"></p>
+      <div class="actions">
+        <button type="submit" class="primary">Сохранить новую версию</button>
+        <button type="button" id="ed-approve">Утвердить текущую версию</button>
+        <button type="button" id="ed-revoke" class="ghost">Снять утверждение</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script src="/content/app.js"></script>
+</body>
+</html>
