@@ -58,12 +58,12 @@ class Engine:
         with self.connect() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-            if tables and version != 2:
+            if tables and version not in (2, 3):
                 raise ValueError("Legacy database detected. Use a new DB_PATH; retain the old journal separately.")
             db.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS sessions (
-                    sid TEXT PRIMARY KEY, last_seen REAL NOT NULL);
+                    sid TEXT PRIMARY KEY, last_seen REAL NOT NULL, participant TEXT);
                 CREATE TABLE IF NOT EXISTS dedup (
                     eid TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL,
                     created REAL NOT NULL, sent_count INTEGER NOT NULL DEFAULT 0,
@@ -75,14 +75,17 @@ class Engine:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, time REAL NOT NULL, kind TEXT NOT NULL,
                     topic TEXT, version TEXT, value TEXT, delivery TEXT, delivered INTEGER NOT NULL DEFAULT 1,
-                    interaction TEXT);
+                    interaction TEXT, participant TEXT);
                 CREATE INDEX IF NOT EXISTS events_time ON events(time);
                 CREATE INDEX IF NOT EXISTS views_sid ON views(sid);
                 CREATE INDEX IF NOT EXISTS views_created ON views(created);
                 CREATE INDEX IF NOT EXISTS dedup_created ON dedup(created);
                 CREATE INDEX IF NOT EXISTS sessions_seen ON sessions(last_seen);
-                PRAGMA user_version=2;
             """)
+            if tables and version == 2:  # v2 -> v3: псевдоним участника
+                db.execute("ALTER TABLE events ADD COLUMN participant TEXT")
+                db.execute("ALTER TABLE sessions ADD COLUMN participant TEXT")
+            db.execute("PRAGMA user_version=3")
 
     @contextmanager
     def connect(self):
@@ -100,17 +103,22 @@ class Engine:
     def digest(self, value):
         return hmac.new(self.secret, value.encode(), hashlib.sha256).hexdigest()
 
-    def log(self, db, now, kind, topic=None, version=None, value=None, interaction=None):
+    def log(self, db, now, kind, topic=None, version=None, value=None, interaction=None, participant=None):
         db.execute(
-            "INSERT INTO events(time,kind,topic,version,value,interaction) VALUES(?,?,?,?,?,?)",
-            (now, kind, topic, version, value, interaction),
+            "INSERT INTO events(time,kind,topic,version,value,interaction,participant) VALUES(?,?,?,?,?,?,?)",
+            (now, kind, topic, version, value, interaction, participant),
         )
 
+    def participant(self, user_id):
+        """Стабильный псевдоним участника: HMAC от id пользователя, необратим, одинаков между сеансами."""
+        return self.digest("participant:" + user_id)[:10]
+
     def cleanup(self, db, now):
-        stale = list(db.execute("SELECT sid,last_seen FROM sessions WHERE last_seen < ?", (now - self.session_ttl,)))
+        stale = list(db.execute("SELECT * FROM sessions WHERE last_seen < ?", (now - self.session_ttl,)))
         for session in stale:
             db.execute("DELETE FROM views WHERE sid=?", (session["sid"],))
-            self.log(db, session["last_seen"] + self.session_ttl, "session_end", value="timeout")
+            self.log(db, session["last_seen"] + self.session_ttl, "session_end", value="timeout",
+                     participant=session["participant"])
         db.execute("DELETE FROM sessions WHERE last_seen < ?", (now - self.session_ttl,))
         db.execute("DELETE FROM views WHERE created < ?", (now - self.session_ttl,))
         db.execute("DELETE FROM dedup WHERE created < ?", (now - 86400,))
@@ -120,6 +128,7 @@ class Engine:
         validate_event(event)
         now = time.time() if now is None else now
         sid = self.digest(json.dumps([event["conversation_id"], event["user_id"]]))
+        pid = self.participant(event["user_id"])
         eid = self.digest(json.dumps([sid, event["event_id"]]))
         fingerprint = self.digest(json.dumps(event, sort_keys=True, ensure_ascii=False))
         with self.connect() as db:
@@ -142,7 +151,7 @@ class Engine:
                     db.execute("DELETE FROM views WHERE sid=?", (sid,))
                 messages = []
             else:
-                db.execute("INSERT OR REPLACE INTO sessions VALUES(?,?)", (sid, now))
+                db.execute("INSERT OR REPLACE INTO sessions VALUES(?,?,?)", (sid, now, pid))
                 if not active:
                     self.log(db, now, "session_start")
                 if event["type"] == "opened":
@@ -159,6 +168,7 @@ class Engine:
                             "AND interaction IN (SELECT id FROM views WHERE sid=? AND card=? AND version=?)",
                             (eid, sid, message["card_id"], message["version"]),
                         )
+            db.execute("UPDATE events SET participant=? WHERE id>? AND participant IS NULL", (pid, event_start))
             # Responses never echo raw user text, so replay cache contains no free-form input.
             result = {"messages": messages, "reply_id": eid}
             if deferred:
@@ -374,6 +384,7 @@ class Engine:
             return [
                 dict(r)
                 for r in db.execute(
-                    "SELECT time,kind,topic,version,value,delivered FROM events ORDER BY id DESC LIMIT ?", (limit,)
+                    "SELECT time,kind,topic,version,value,delivered,participant FROM events ORDER BY id DESC LIMIT ?",
+                    (limit,),
                 )
             ]

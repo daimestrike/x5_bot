@@ -3,76 +3,88 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Справочник Аватара — продуктовые метрики</title>
+<title>Справочник Аватара — метрики пилота</title>
 <link rel="stylesheet" href="/metrics/dashboard.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand"><span class="x5">X5</span><span class="divider"></span><span class="product">Справочник Аватара · метрики пилота</span></div>
-  <form id="auth" class="auth">
-    <label for="token" class="sr-only">METRICS_TOKEN</label>
-    <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
-    <select id="days" aria-label="Период">
-      <option value="7">7 дней</option>
-      <option value="14">14 дней</option>
-      <option value="30" selected>30 дней</option>
-      <option value="90">90 дней</option>
-    </select>
-    <button type="submit">Обновить</button>
-  </form>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="logo" href="/metrics/dashboard" aria-label="X5 Group">
+      <svg viewBox="0 0 64 32" width="64" height="32" aria-hidden="true"><rect width="64" height="32" rx="6" fill="#5FB233"/><text x="32" y="22" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="19" fill="#fff">X5</text></svg>
+      <span>Tech</span>
+    </a>
+    <nav class="crumbs"><span>Справочник Аватара</span><span class="sep">/</span><span>Метрики пилота</span></nav>
+    <form id="auth" class="auth">
+      <label for="token" class="sr-only">METRICS_TOKEN</label>
+      <input id="token" type="text" placeholder="METRICS_TOKEN" autocomplete="off" required>
+      <button type="submit">Открыть</button>
+    </form>
+  </div>
 </header>
 
-<main>
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Удалённая инвентаризация · бот в Rooms</p>
+    <h1>Метрики пилота</h1>
+    <p class="lead">Пользуются ли Аватары справочником, помогают ли ответы и какие темы нужно доработать. Всё считается по обезличенному журналу бота.</p>
+    <div class="chips" id="days" role="tablist" aria-label="Период">
+      <button type="button" data-days="7">7 дней</button>
+      <button type="button" data-days="14">14 дней</button>
+      <button type="button" data-days="30" class="active">30 дней</button>
+      <button type="button" data-days="90">90 дней</button>
+    </div>
+    <p id="period" class="period"></p>
+  </div>
+</section>
+
+<main class="wrap">
   <p id="status" class="status" hidden></p>
 
   <section class="kpis" id="kpis" hidden>
-    <article class="kpi"><h3>Сеансы</h3><p class="value" id="k-sessions">—</p><p class="hint">открытий бота за период</p></article>
-    <article class="kpi"><h3>Обращения</h3><p class="value" id="k-appeals">—</p><p class="hint">показанных карточек · <span id="k-per-session">—</span> на сеанс</p></article>
-    <article class="kpi target"><h3>Охват оценкой</h3><p class="value" id="k-coverage">—</p><p class="hint">цель ≥ 50% · <span id="k-ratings">—</span> оценок</p><div class="bar"><div id="b-coverage"></div><i style="left:50%"></i></div></article>
-    <article class="kpi target"><h3>Полезность</h3><p class="value" id="k-helpfulness">—</p><p class="hint">цель ≥ 70% · «Помогло» / все оценки</p><div class="bar"><div id="b-helpfulness"></div><i style="left:70%"></i></div></article>
-    <article class="kpi"><h3>Запросы помощи</h3><p class="value" id="k-help">—</p><p class="hint"><span id="k-help-share">—</span> от обращений</p></article>
-    <article class="kpi"><h3>Пробелы базы</h3><p class="value" id="k-gaps">—</p><p class="hint"><span id="k-miss">—</span> промахов поиска · <span id="k-unknown">—</span> непонятных фраз</p></article>
+    <article class="kpi"><span class="kpi-label">Сеансы</span><span class="kpi-value" id="k-sessions">—</span><span class="kpi-hint"><b id="k-participants">—</b> участников</span></article>
+    <article class="kpi"><span class="kpi-label">Обращения</span><span class="kpi-value" id="k-appeals">—</span><span class="kpi-hint"><b id="k-per-session">—</b> на сеанс</span></article>
+    <article class="kpi goal"><span class="kpi-label">Охват оценкой</span><span class="kpi-value" id="k-coverage">—</span><span class="kpi-hint">цель ≥ 50% · <b id="k-ratings">—</b> оценок</span><div class="goalbar"><div id="b-coverage"></div><i style="left:50%"></i></div></article>
+    <article class="kpi goal"><span class="kpi-label">Полезность</span><span class="kpi-value" id="k-helpfulness">—</span><span class="kpi-hint">цель ≥ 70% · «Помогло» / оценки</span><div class="goalbar"><div id="b-helpfulness"></div><i style="left:70%"></i></div></article>
+    <article class="kpi"><span class="kpi-label">Запросы помощи</span><span class="kpi-value" id="k-help">—</span><span class="kpi-hint"><b id="k-help-share">—</b> от обращений</span></article>
+    <article class="kpi"><span class="kpi-label">На доработку</span><span class="kpi-value" id="k-gaps">—</span><span class="kpi-hint"><b id="k-miss">—</b> промахов поиска · <b id="k-unknown">—</b> фраз</span></article>
   </section>
 
-  <section class="grid" id="charts" hidden>
-    <article class="panel wide">
-      <h2>Динамика по дням</h2>
-      <div class="legend"><span><i class="c1"></i>сеансы</span><span><i class="c2"></i>обращения</span><span><i class="c3"></i>оценки</span></div>
+  <div id="charts" hidden>
+    <section class="block">
+      <div class="block-head"><h2>Динамика</h2><div class="legend"><span><i class="c1"></i>сеансы</span><span><i class="c2"></i>обращения</span><span><i class="c3"></i>оценки</span></div></div>
       <div id="series" class="chart"></div>
-    </article>
-    <article class="panel">
-      <h2>Обращения по разделам</h2>
-      <div id="sections" class="bars"></div>
-    </article>
-    <article class="panel">
-      <h2>Причины «Не помогло»</h2>
-      <div id="reasons" class="bars"></div>
-      <h2 class="mt">Помощь человека</h2>
-      <div id="help" class="bars"></div>
-    </article>
-    <article class="panel wide">
-      <h2>Топ карточек</h2>
-      <table id="top"><thead><tr><th>ID</th><th>Тема</th><th class="num">Показы</th><th class="num">Оценок</th><th class="num">Полезность</th></tr></thead><tbody></tbody></table>
-    </article>
-    <article class="panel wide">
-      <h2>На доработку <small>карточки с «Не помогло»</small></h2>
-      <table id="gaps"><thead><tr><th>ID</th><th>Тема</th><th class="num">Не помогло</th><th class="num">Показы</th><th>Причины</th></tr></thead><tbody></tbody></table>
-      <p id="gaps-empty" class="empty" hidden>Отрицательных оценок за период нет.</p>
-    </article>
-    <article class="panel wide ops">
-      <h2>Техника</h2>
+    </section>
+
+    <section class="cols">
+      <div class="block"><div class="block-head"><h2>Разделы</h2><span class="sub">обращения и полезность</span></div><div id="sections" class="bars"></div></div>
+      <div class="block"><div class="block-head"><h2>Почему не помогло</h2></div><div id="reasons" class="bars"></div></div>
+      <div class="block"><div class="block-head"><h2>Помощь человека</h2></div><div id="help" class="bars"></div></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><h2>Участники</h2><span class="sub"><b id="k-labeled">—</b> с подписью · псевдонимы, не ПДн</span></div>
+      <div class="tablewrap"><table id="participants"><thead><tr><th>Участник</th><th>Подпись</th><th class="num">Сеансы</th><th class="num">Обращения</th><th class="num">Оценок</th><th class="num">Полезность</th><th class="num">Помощь</th><th>Первый визит</th><th>Последний</th></tr></thead><tbody></tbody></table></div>
+      <p class="note">Подпись (магазин, роль) задаётся в <code>content/participants.yaml</code> по псевдониму — так сеансы сопоставляются с ПИ на пилоте. Сам бот имён и ID Rooms не хранит.</p>
+    </section>
+
+    <section class="cols two">
+      <div class="block"><div class="block-head"><h2>Топ карточек</h2></div><div class="tablewrap"><table id="top"><thead><tr><th>ID</th><th>Тема</th><th class="num">Показы</th><th class="num">Оценок</th><th class="num">Полезность</th></tr></thead><tbody></tbody></table></div></div>
+      <div class="block"><div class="block-head"><h2>На доработку</h2><span class="sub">карточки с «Не помогло»</span></div><div class="tablewrap"><table id="gaps"><thead><tr><th>ID</th><th>Тема</th><th class="num">Не помогло</th><th>Причины</th></tr></thead><tbody></tbody></table></div><p id="gaps-empty" class="empty" hidden>Отрицательных оценок за период нет.</p></div>
+    </section>
+
+    <section class="block ops">
+      <div class="block-head"><h2>Техника</h2></div>
       <div class="ops-row">
-        <span>Ошибки выдачи: <b id="o-errors">—</b></span>
-        <span>Просроченных доставок: <b id="o-expired">—</b></span>
-        <span>В очереди: <b id="o-pending">—</b></span>
-        <span>Вложений: <b id="o-attachments">—</b></span>
-        <span>Режим: <b id="o-mode">—</b></span>
+        <span>Ошибки выдачи <b id="o-errors">—</b></span>
+        <span>Просроченные доставки <b id="o-expired">—</b></span>
+        <span>В очереди <b id="o-pending">—</b></span>
+        <span>Вложений <b id="o-attachments">—</b></span>
+        <span>Режим <b id="o-mode">—</b></span>
       </div>
-      <p class="note" id="note"></p>
-    </article>
-  </section>
+    </section>
+  </div>
 </main>
-<footer>Персональные данные и содержание ПИ в журнале отсутствуют. Использование на одну ПИ, отвлечения ревизора и качество ПИ считаются вручную на пилоте.</footer>
+<footer class="wrap">Использование на одну ПИ, отвлечения ревизора и качество ПИ считаются вручную наблюдателем на пилоте — в журнале бота этих данных нет.</footer>
 <script src="/metrics/dashboard.js"></script>
 </body>
 </html>

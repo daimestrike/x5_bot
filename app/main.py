@@ -271,7 +271,7 @@ def create_app(settings=None):
         authorize(request, admin=True)
         rows = engine.journal_rows()
         buffer = io.StringIO()
-        cols = ["time", "kind", "topic", "version", "value", "delivered"]
+        cols = ["time", "kind", "topic", "version", "value", "delivered", "participant"]
         writer = csv.DictWriter(buffer, fieldnames=cols, delimiter=";")
         writer.writeheader()
         writer.writerows(rows)

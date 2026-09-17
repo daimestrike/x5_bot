@@ -53,3 +53,49 @@ def test_dashboard_page_and_api(settings):
         assert c.get("/metrics/product?days=abc", headers=h).status_code == 400
         body = c.get("/metrics/product?days=7", headers=h).json()
         assert body["period"]["days"] == 7 and "delivery" in body and body["mode"] == "demo"
+
+
+def test_participants_are_pseudonymous_and_labelled(settings, tmp_path, event):
+    import shutil
+
+    from app.content import Catalog
+    from app.engine import Engine
+
+    content = tmp_path / "content"
+    shutil.copytree(settings.content_dir, content)
+    engine = Engine(Catalog(content), settings.db_path, settings.state_secret)
+    pid = engine.participant("test-user")
+    (content / "participants.yaml").write_text(f'{pid}: "Магазин 4471, ДМ"\n', encoding="utf-8")
+    engine = Engine(Catalog(content), settings.db_path, settings.state_secret)
+    engine.handle(event(action="card:A-07"))
+    engine.handle(dict(event_id="x1", user_id="other", conversation_id="c2", type="action", action="card:B-01"))
+
+    m = product_metrics(engine, days=7)
+    assert m["summary"]["participants"] == 2 and m["summary"]["participants_labeled"] == 1
+    first = next(u for u in m["participants"] if u["id"] == pid)
+    assert first["label"] == "Магазин 4471, ДМ" and first["appeals"] == 1 and first["sessions"] == 1
+    assert len(pid) == 10 and "test-user" not in pid
+    with engine.connect() as db:
+        dump = "\n".join(db.iterdump())
+    assert "test-user" not in dump and "other" not in dump
+
+
+def test_v2_database_migrates_to_v3(settings, tmp_path):
+    import sqlite3
+
+    from app.content import Catalog
+    from app.engine import Engine
+
+    db_path = tmp_path / "old.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE sessions (sid TEXT PRIMARY KEY, last_seen REAL NOT NULL);"
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, time REAL NOT NULL, kind TEXT NOT NULL, topic TEXT, version TEXT,"
+        " value TEXT, delivery TEXT, delivered INTEGER NOT NULL DEFAULT 1, interaction TEXT);"
+        "INSERT INTO events(time,kind) VALUES (1, 'session_start'); PRAGMA user_version=2;"
+    )
+    conn.close()
+    engine = Engine(Catalog(settings.content_dir), db_path, settings.state_secret)
+    with engine.connect() as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("SELECT participant FROM events").fetchone()[0] is None

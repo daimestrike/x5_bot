@@ -14,6 +14,13 @@ class Catalog:
     def __init__(self, path, production=False):
         path = Path(path)
         self.settings = yaml.safe_load((path / "settings.yaml").read_text(encoding="utf-8"))
+        # Подписи участников для дашборда: псевдоним -> «Магазин 4471, ДМ». Заполняет владелец пилота вручную.
+        labels = path / "participants.yaml"
+        self.participants = (yaml.safe_load(labels.read_text(encoding="utf-8")) or {}) if labels.exists() else {}
+        if not isinstance(self.participants, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in self.participants.items()
+        ):
+            raise ValueError("participants.yaml must map pseudonym -> label")
         rows = yaml.safe_load((path / "cards.yaml").read_text(encoding="utf-8"))
         self.cards = {}
         for card in rows:

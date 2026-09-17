@@ -25,7 +25,7 @@ def product_metrics(engine, days=30, now=None):
         rows = [
             dict(r)
             for r in db.execute(
-                "SELECT time,kind,topic,version,value,interaction FROM events e WHERE time>=? AND delivered=1 "
+                "SELECT time,kind,topic,version,value,interaction,participant FROM events e WHERE time>=? AND delivered=1 "
                 "AND (kind NOT IN ('rating','reason') OR EXISTS (SELECT 1 FROM events v "
                 "WHERE v.kind='card' AND v.interaction=e.interaction AND v.delivered=1)) ORDER BY id",
                 (since,),
@@ -95,6 +95,42 @@ def product_metrics(engine, days=30, now=None):
         day = (start + dt.timedelta(days=i + 1)).isoformat()
         series.append({"date": day, **daily.get(day, {"sessions": 0, "views": 0, "ratings": 0, "helped": 0})})
 
+    # Участники: псевдоним -> активность; подпись из content/participants.yaml
+    per_user = defaultdict(lambda: {"sessions": 0, "views": 0, "yes": 0, "no": 0, "help": 0, "last": 0.0, "first": None})
+    for r in rows:
+        pid = r["participant"]
+        if not pid:
+            continue
+        u = per_user[pid]
+        u["last"] = max(u["last"], r["time"])
+        u["first"] = r["time"] if u["first"] is None else min(u["first"], r["time"])
+        if r["kind"] == "session_start":
+            u["sessions"] += 1
+        elif r["kind"] == "card":
+            u["views"] += 1
+        elif r["kind"] == "rating":
+            u["yes" if r["value"] == "yes" else "no"] += 1
+        elif r["kind"] == "help":
+            u["help"] += 1
+    labels = getattr(catalog, "participants", {}) or {}
+    participants = []
+    for pid, u in per_user.items():
+        rated = u["yes"] + u["no"]
+        participants.append(
+            {
+                "id": pid,
+                "label": labels.get(pid, ""),
+                "sessions": u["sessions"],
+                "appeals": u["views"],
+                "rated": rated,
+                "helpfulness": _pct(u["yes"], rated),
+                "help": u["help"],
+                "first_seen": dt.datetime.fromtimestamp(u["first"], dt.timezone.utc).isoformat(timespec="minutes"),
+                "last_seen": dt.datetime.fromtimestamp(u["last"], dt.timezone.utc).isoformat(timespec="minutes"),
+            }
+        )
+    participants.sort(key=lambda u: (-u["appeals"], -u["sessions"], u["id"]))
+
     help_by_type = Counter(r["value"] for r in rows if r["kind"] == "help")
     reason_totals = Counter(r["value"] for r in reasons)
     gaps = [c for c in cards if c["not_helped"] >= 1]
@@ -125,7 +161,10 @@ def product_metrics(engine, days=30, now=None):
             "material_errors": by_kind["material_error"],
             "delivery_expired": by_kind["delivery_expired"],
             "appeals_per_session": _pct(len(views), by_kind["session_start"]),
+            "participants": len(participants),
+            "participants_labeled": sum(1 for u in participants if u["label"]),
         },
+        "participants": participants,
         "help_by_type": [
             {"type": k, "name": help_routes.get(k, {}).get("title", k), "count": help_by_type.get(k, 0)} for k in help_routes
         ],

@@ -16,7 +16,7 @@
   function kpi(id, value, cls) {
     const el = $(id);
     el.textContent = value;
-    if (cls !== undefined) el.className = 'value ' + cls;
+    if (cls !== undefined) el.className = 'kpi-value ' + cls;
   }
 
   function targetBar(barId, value, target) {
@@ -46,11 +46,11 @@
     const x = (i) => padL + (i + 0.5) * ((W - padL) / n);
     const y = (v) => padT + (H - padT - padB) * (1 - v / max);
     const path = (key) => series.map((d, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(d[key]).toFixed(1)).join(' ');
-    const cols = { sessions: '#1B4D2B', views: '#5FB233', ratings: '#A6D64B' };
+    const cols = { sessions: '#1C3F24', views: '#5FB233', ratings: '#B9DD8C' };
     let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Динамика по дням">`;
     for (let g = 0; g <= 4; g++) {
       const v = Math.round((max * g) / 4), yy = y(v).toFixed(1);
-      svg += `<line x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}" stroke="#E1E6E0"/><text class="axis" x="${padL - 6}" y="${(+yy) + 4}" text-anchor="end">${v}</text>`;
+      svg += `<line x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}" stroke="#E6EAE6"/><text class="axis" x="${padL - 6}" y="${(+yy) + 4}" text-anchor="end">${v}</text>`;
     }
     const barW = Math.max(2, (W - padL) / n * 0.28);
     series.forEach((d, i) => {
@@ -81,9 +81,14 @@
     if (emptyId) $(emptyId).hidden = rows.length > 0;
   }
 
+  function fmtTime(iso) {
+    return iso ? iso.slice(5, 16).replace('T', ' ') : '—';
+  }
+
   function render(m) {
     const s = m.summary;
     kpi('k-sessions', num(s.sessions));
+    $('k-participants').textContent = num(s.participants);
     kpi('k-appeals', num(s.appeals));
     $('k-per-session').textContent = s.appeals_per_session === null ? '—' : s.appeals_per_session.toFixed(1);
     kpi('k-coverage', pct(s.feedback_coverage), s.coverage_ok === null ? 'none' : s.coverage_ok ? 'ok' : 'bad');
@@ -104,22 +109,30 @@
 
     table('top', m.top_cards, (c) => `<td class="id">${esc(c.id)}</td><td>${esc(c.title)}</td><td class="num">${c.views}</td><td class="num">${c.rated}</td>` +
       `<td class="num ${c.helpfulness === null ? '' : c.helpfulness >= m.targets.helpfulness ? 'ok-text' : 'bad-text'}">${pct(c.helpfulness)}</td>`);
-    table('gaps', m.gaps, (c) => `<td class="id">${esc(c.id)}</td><td>${esc(c.title)}</td><td class="num bad-text">${c.not_helped}</td><td class="num">${c.views}</td>` +
-      `<td>${Object.entries(c.reasons).map(([k, v]) => `<span class="pill">${esc(k)} · ${v}</span>`).join('') || '—'}</td>`, 'gaps-empty');
+    table('gaps', m.gaps, (c) => `<td class="id">${esc(c.id)}</td><td>${esc(c.title)}</td><td class="num bad-text">${c.not_helped}</td>` +
+      `<td>${Object.entries(c.reasons).map(([k, v]) => `<span class="pill warn">${esc(k)} · ${v}</span>`).join('') || '—'}</td>`, 'gaps-empty');
+
+    $('k-labeled').textContent = num(s.participants_labeled) + ' из ' + num(s.participants);
+    table('participants', m.participants, (u) => `<td class="id">${esc(u.id)}</td>` +
+      `<td class="${u.label ? '' : 'muted'}">${u.label ? esc(u.label) : 'без подписи'}</td>` +
+      `<td class="num">${u.sessions}</td><td class="num">${u.appeals}</td><td class="num">${u.rated}</td>` +
+      `<td class="num ${u.helpfulness === null ? '' : u.helpfulness >= m.targets.helpfulness ? 'ok-text' : 'bad-text'}">${pct(u.helpfulness)}</td>` +
+      `<td class="num">${u.help}</td><td class="muted">${fmtTime(u.first_seen)}</td><td class="muted">${fmtTime(u.last_seen)}</td>`);
 
     $('o-errors').textContent = num(s.material_errors);
     $('o-expired').textContent = num(s.delivery_expired);
     $('o-pending').textContent = num(m.delivery && m.delivery.pending);
     $('o-attachments').textContent = num(s.attachments);
     $('o-mode').textContent = m.mode === 'production' ? 'production' : 'demo (Rooms не подключён)';
-    $('note').textContent = `Период: ${m.period.since.slice(0, 10)} — ${m.period.until.slice(0, 10)} (UTC). ${m.note}`;
+    $('period').textContent = `${m.period.since.slice(0, 10)} — ${m.period.until.slice(0, 10)} (UTC)`;
     $('kpis').hidden = false;
     $('charts').hidden = false;
   }
 
+  let days = '30';
+
   async function load() {
     const token = $('token').value.trim();
-    const days = $('days').value;
     status('Загрузка…');
     try {
       const r = await fetch(`/metrics/product?days=${encodeURIComponent(days)}`, {
@@ -136,6 +149,13 @@
   }
 
   $('auth').addEventListener('submit', (e) => { e.preventDefault(); load(); });
+  $('days').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-days]');
+    if (!b) return;
+    days = b.dataset.days;
+    $('days').querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+    load();
+  });
   let saved = '';
   try { saved = sessionStorage.getItem('metrics_token') || ''; } catch (e) { /* ignore */ }
   $('token').value = saved || DEMO_TOKEN;
