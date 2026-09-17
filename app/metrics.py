@@ -33,7 +33,6 @@ def product_metrics(engine, days=30, now=None):
         ]
     catalog = engine.catalog
     sections = catalog.settings["sections"]
-    help_routes = catalog.settings["help_routes"]
 
     by_kind = Counter(r["kind"] for r in rows)
     views = [r for r in rows if r["kind"] == "card"]
@@ -96,7 +95,7 @@ def product_metrics(engine, days=30, now=None):
         series.append({"date": day, **daily.get(day, {"sessions": 0, "views": 0, "ratings": 0, "helped": 0})})
 
     # Участники: псевдоним -> активность; подпись из content/participants.yaml
-    per_user = defaultdict(lambda: {"sessions": 0, "views": 0, "yes": 0, "no": 0, "help": 0, "last": 0.0, "first": None})
+    per_user = defaultdict(lambda: {"sessions": 0, "views": 0, "yes": 0, "no": 0, "last": 0.0, "first": None})
     for r in rows:
         pid = r["participant"]
         if not pid:
@@ -110,8 +109,6 @@ def product_metrics(engine, days=30, now=None):
             u["views"] += 1
         elif r["kind"] == "rating":
             u["yes" if r["value"] == "yes" else "no"] += 1
-        elif r["kind"] == "help":
-            u["help"] += 1
     labels = getattr(catalog, "participants", {}) or {}
     participants = []
     for pid, u in per_user.items():
@@ -124,14 +121,12 @@ def product_metrics(engine, days=30, now=None):
                 "appeals": u["views"],
                 "rated": rated,
                 "helpfulness": _pct(u["yes"], rated),
-                "help": u["help"],
                 "first_seen": dt.datetime.fromtimestamp(u["first"], dt.timezone.utc).isoformat(timespec="minutes"),
                 "last_seen": dt.datetime.fromtimestamp(u["last"], dt.timezone.utc).isoformat(timespec="minutes"),
             }
         )
     participants.sort(key=lambda u: (-u["appeals"], -u["sessions"], u["id"]))
 
-    help_by_type = Counter(r["value"] for r in rows if r["kind"] == "help")
     reason_totals = Counter(r["value"] for r in reasons)
     gaps = [c for c in cards if c["not_helped"] >= 1]
     gaps.sort(key=lambda c: (-c["not_helped"], -c["views"]))
@@ -152,8 +147,6 @@ def product_metrics(engine, days=30, now=None):
             "helpfulness": helpfulness,
             "coverage_ok": None if coverage is None else coverage >= TARGETS["feedback_coverage"],
             "helpfulness_ok": None if helpfulness is None else helpfulness >= TARGETS["helpfulness"],
-            "help_requests": sum(help_by_type.values()),
-            "help_share": _pct(sum(help_by_type.values()), len(views)),
             "search": by_kind["search"],
             "search_miss": by_kind["search_miss"],
             "unknown_input": by_kind["unknown_input"],
@@ -165,9 +158,6 @@ def product_metrics(engine, days=30, now=None):
             "participants_labeled": sum(1 for u in participants if u["label"]),
         },
         "participants": participants,
-        "help_by_type": [
-            {"type": k, "name": help_routes.get(k, {}).get("title", k), "count": help_by_type.get(k, 0)} for k in help_routes
-        ],
         "reasons": [{"reason": k, "name": v, "count": reason_totals.get(k, 0)} for k, v in REASON_LABELS.items()],
         "sections": per_section,
         "top_cards": cards[:10],

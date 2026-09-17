@@ -96,8 +96,6 @@
     targetBar('b-coverage', s.feedback_coverage, m.targets.feedback_coverage);
     kpi('k-helpfulness', pct(s.helpfulness), s.helpfulness_ok === null ? 'none' : s.helpfulness_ok ? 'ok' : 'bad');
     targetBar('b-helpfulness', s.helpfulness, m.targets.helpfulness);
-    kpi('k-help', num(s.help_requests));
-    $('k-help-share').textContent = pct(s.help_share);
     kpi('k-gaps', num(m.gaps.length));
     $('k-miss').textContent = num(s.search_miss);
     $('k-unknown').textContent = num(s.unknown_input);
@@ -105,7 +103,6 @@
     seriesChart(m.series);
     bars('sections', m.sections.map((x) => ({ name: x.name, count: x.views, sub: x.helpfulness === null ? '' : 'полезность ' + pct(x.helpfulness) })));
     bars('reasons', m.reasons.map((x) => ({ name: x.name, count: x.count })), true);
-    bars('help', m.help_by_type.map((x) => ({ name: x.name, count: x.count })));
 
     table('top', m.top_cards, (c) => `<td class="id">${esc(c.id)}</td><td>${esc(c.title)}</td><td class="num">${c.views}</td><td class="num">${c.rated}</td>` +
       `<td class="num ${c.helpfulness === null ? '' : c.helpfulness >= m.targets.helpfulness ? 'ok-text' : 'bad-text'}">${pct(c.helpfulness)}</td>`);
@@ -117,7 +114,7 @@
       `<td class="${u.label ? '' : 'muted'}">${u.label ? esc(u.label) : 'без подписи'}</td>` +
       `<td class="num">${u.sessions}</td><td class="num">${u.appeals}</td><td class="num">${u.rated}</td>` +
       `<td class="num ${u.helpfulness === null ? '' : u.helpfulness >= m.targets.helpfulness ? 'ok-text' : 'bad-text'}">${pct(u.helpfulness)}</td>` +
-      `<td class="num">${u.help}</td><td class="muted">${fmtTime(u.first_seen)}</td><td class="muted">${fmtTime(u.last_seen)}</td>`);
+      `<td class="muted">${fmtTime(u.first_seen)}</td><td class="muted">${fmtTime(u.last_seen)}</td>`);
 
     $('o-errors').textContent = num(s.material_errors);
     $('o-expired').textContent = num(s.delivery_expired);

@@ -16,7 +16,6 @@ WELCOME = (
     "Нажмите «Меню» — или напишите одно слово, например «модем»."
 )
 MENU = {"label": "Меню", "action": "menu"}
-HELP = {"label": "Помощь человека", "action": "help"}
 SEARCH = {"label": "Поиск", "action": "search"}
 REASONS = {"wrong": "Не то, что искал", "details": "Не хватает деталей", "failed": "Сделал, не сработало"}
 
@@ -186,7 +185,7 @@ class Engine:
             "S1",
             "Что нужно?",
             [{"label": name, "action": "section:" + key + ":0"} for key, name in self.catalog.settings["sections"].items()]
-            + [SEARCH, HELP],
+            + [SEARCH],
         )
 
     def section(self, section, page):
@@ -214,7 +213,8 @@ class Engine:
         url = self.catalog.settings["fallback_url"]
         text = "Не могу открыть материал. "
         text += "Полная инструкция: " + url if url else "Ссылка на инструкцию ещё не настроена."
-        return screen("S8", text, [HELP, MENU])
+        text += " Если нужно срочно — обратитесь к ревизору."
+        return screen("S8", text, [MENU])
 
     def respond(self, db, sid, e, now):
         if e["type"] == "attachment":
@@ -229,8 +229,6 @@ class Engine:
                 return screen("S7", "Пожалуйста. Если понадобится что-то ещё — «Меню».")
             if text in ("поиск", "/search"):
                 return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
-            if text in ("помощь", "/help"):
-                return self.help_menu()
             if len(text.split()) > 2 or not re.fullmatch(r"[а-яa-z -]{1,60}", text):
                 self.log(db, now, "unknown_input", value="redacted")
                 return self.unknown()
@@ -239,9 +237,9 @@ class Engine:
             if not matches:
                 return screen(
                     "S5b",
-                    "Ничего не нашёл. Выберите раздел в меню или запросите помощь. "
+                    "Ничего не нашёл. Выберите раздел в меню или спросите ревизора. "
                     "Отсутствие ответа отмечено; текст запроса не сохраняется.",
-                    [MENU, HELP],
+                    [MENU, SEARCH],
                 )
             return screen(
                 "S5a",
@@ -254,15 +252,6 @@ class Engine:
             return self.menu()
         if a == "search":
             return screen("S5", "Напишите одно-два слова: модем, пароль, зонирование, наушники, ЭЦП.")
-        if a == "help":
-            return self.help_menu()
-        if a.startswith("help:"):
-            key = a[5:]
-            route = self.catalog.settings["help_routes"].get(key)
-            if not route:
-                return self.unknown()
-            self.log(db, now, "help", value=key)
-            return screen("S6a", route["text"] or "Контакт ещё не настроен. Свяжитесь с ревизором по обычному рабочему каналу.")
         match = re.fullmatch(r"section:([A-E]):([01])", a)
         if match:
             return self.section(match[1], int(match[2]))
@@ -325,17 +314,10 @@ class Engine:
                 text = (
                     "Записал. "
                     + ("Полная инструкция: " + row["url"] + ". " if row["url"] else "")
-                    + "Если нужно решить сейчас — запросите помощь."
+                    + "Если нужно решить сейчас — спросите ревизора голосом."
                 )
-                return screen("S4a", text, [HELP, {"label": "Другие темы", "action": "section:" + row["section"] + ":0"}, MENU])
+                return screen("S4a", text, [{"label": "Другие темы", "action": "section:" + row["section"] + ":0"}, MENU])
         return self.unknown()
-
-    def help_menu(self):
-        return screen(
-            "S6",
-            "С чем нужна помощь?",
-            [{"label": v["title"], "action": "help:" + k} for k, v in self.catalog.settings["help_routes"].items()] + [MENU],
-        )
 
     def metrics(self):
         with self.connect() as db:

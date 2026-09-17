@@ -70,8 +70,6 @@ def production_settings(settings, tmp_path):
         card.update(approved=True, status="published", owner="Test owner", url="https://docs.invalid/source")
     content = yaml.safe_load((settings.content_dir / "settings.yaml").read_text())
     content.update(allowed_link_hosts=["docs.invalid"], fallback_url="https://docs.invalid/source", channel_approved=True)
-    for route in content["help_routes"].values():
-        route.update(text="Test support route", owner="Test owner")
     (target / "cards.yaml").write_text(yaml.safe_dump(cards, allow_unicode=True))
     (target / "settings.yaml").write_text(yaml.safe_dump(content, allow_unicode=True))
     return replace(
@@ -158,7 +156,7 @@ def test_native_jwt_status_privacy(settings, tmp_path):
             assert c.post("/command", json=e, headers=signed(settings, **changes)).status_code == 401
         assert c.post("/command", json=e, headers=signed(settings)).status_code == 202
         r = c.get("/status", params={"bot_id": settings.rooms_bot_id}, headers=signed(settings))
-        assert [x["body"] for x in r.json()["result"]["commands"]] == ["/menu", "/search", "/help"]
+        assert [x["body"] for x in r.json()["result"]["commands"]] == ["/menu", "/search"]
         with app.state.engine.connect() as db:
             dump = "\n".join(db.iterdump())
         for private in [e["from"]["user_huid"], e["from"]["group_chat_id"], "Private employee", "secret-inventory-text"]:

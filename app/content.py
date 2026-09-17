@@ -64,9 +64,6 @@ class Catalog:
                 raise ValueError("Confirm Rooms phone channel before production")
             if not self.settings["fallback_url"]:
                 raise ValueError("Set fallback_url")
-            for route in self.settings["help_routes"].values():
-                if not route["text"].strip() or not route["owner"].strip():
-                    raise ValueError("Help routes require text and owner")
 
     def validate_url(self, url):
         parsed = urlsplit(url)

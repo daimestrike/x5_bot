@@ -33,7 +33,6 @@ def test_s1_exact_menu(engine, event):
         "Порядок и после ПИ",
         "Этапы ПИ — справка",
         "Поиск",
-        "Помощь человека",
     ]
 
 
@@ -101,7 +100,7 @@ def test_s4_and_s4a_three_reasons(engine, event):
         n["user_id"] = key
         response = engine.handle(n)
         assert last(response)["screen"] == "S4a"
-        assert "help" in actions(response) and "menu" in actions(response)
+        assert "menu" in actions(response) and "help" not in actions(response)
     assert {r["value"] for r in engine.journal_rows() if r["kind"] == "reason"} == {"wrong", "details", "failed"}
 
 
@@ -135,9 +134,10 @@ def test_no_gk_actions(engine, event):
     assert last(r)["screen"] == "S7"
 
 
-def test_help_and_unavailable(engine, event):
-    assert last(engine.handle(event(action="help")))["screen"] == "S6"
-    assert last(engine.handle(event(action="help:tech")))["screen"] == "S6a"
+def test_no_human_help_and_unavailable(engine, event):
+    assert last(engine.handle(event(action="help")))["screen"] == "S7"  # маршрут помощи убран из MVP
+    assert last(engine.handle(event(action="help:tech")))["screen"] == "S7"
+    assert "help" not in actions(engine.handle(event(action="menu")))
     assert last(engine.handle(event(action="card:Z-99")))["screen"] == "S8"
     engine.catalog.cards["B-07"]["available"] = False
     assert last(engine.handle(event(action="card:B-07")))["screen"] == "S8"

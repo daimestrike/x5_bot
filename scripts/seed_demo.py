@@ -66,9 +66,6 @@ def main():
                     view = rate[1]["action"].split(":")[1]
                     send(user, t, type="action", action=f"reason:{view}:" + rng.choice(["wrong", "details", "details", "failed"]))
                     t += 5
-                    if rng.random() < 0.4:
-                        send(user, t, type="action", action="help:" + rng.choice(["tech", "tech", "pi", "org"]))
-                        t += 5
         if rng.random() < 0.05:
             send(user, t, type="attachment", attachment_type="audio")
         send(user, t + 30, type="closed")
