@@ -8,6 +8,52 @@
 
 [Материал для защиты проекта](docs/DEFENSE.md): итоговые возможности, формулы метрик, ответы на вопросы и сценарий демонстрации.
 
+## Быстрые команды
+
+Сервер Ubuntu в контуре без интернета. Архив скачивается снаружи и копируется на сервер.
+
+**Обновить работающую установку** — данные, `.env` и содержание сохраняются, при ошибке откат:
+
+```bash
+scp rooms-bot-*.tar.gz* rooms@СЕРВЕР:~/            # с машины, где есть интернет
+ssh rooms@СЕРВЕР
+cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --offline --service rooms-bot
+```
+
+**Поставить с нуля:**
+
+```bash
+sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
+tar xzf ~/rooms-bot-1.2.0.tar.gz --strip-components=1 -C /opt/rooms-bot
+cd /opt/rooms-bot && ./setup.sh --offline && ./start.sh
+```
+
+**Проверить и посмотреть:**
+
+```bash
+./start.sh --check                                  # конфигурация верна?
+curl -s localhost:8080/health                       # сервис жив, ИИ включён?
+sudo journalctl -u rooms-bot -n 50 --no-pager       # что в логах
+```
+
+**Как служба systemd** (чтобы поднимался сам после перезагрузки):
+
+```bash
+sudo cp deploy/rooms-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now rooms-bot
+```
+
+**Откатиться на прежнюю версию:**
+
+```bash
+ls backups/                                         # pre-update-ГГГГММДД-ЧЧММСС
+cp -r backups/pre-update-*/code/. .  && sudo systemctl restart rooms-bot
+```
+
+Если `--offline` не проходит, в `wheels/` нет полного набора пакетов для Linux и Python 3.12 —
+соберите wheelhouse снаружи (`pip download -r requirements.txt -d wheels`) или укажите внутренний
+индекс: `--index-url https://ВНУТРЕННИЙ-PYPI/simple`.
+
 ## Как выглядит диалог
 
 - Приветствие один раз за сеанс, кнопка «Меню».

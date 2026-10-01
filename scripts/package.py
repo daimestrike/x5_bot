@@ -18,7 +18,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_DIRS = {"app", "content", "scripts", "tests", "docs", "wheels"}
+ALLOWED_DIRS = {"app", "content", "scripts", "tests", "docs", "wheels", "deploy"}
 ALLOWED_FILES = {
     "README.md",
     "QUICKSTART.md",
@@ -37,6 +37,7 @@ ALLOWED_FILES = {
     "run.py",
     "setup.sh",
     "start.sh",
+    "update.sh",
     "setup.cmd",
     "start.cmd",
 }

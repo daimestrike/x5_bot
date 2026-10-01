@@ -1,0 +1,28 @@
+# Systemd-юнит для Ubuntu. Скопировать, подставить путь и пользователя:
+#   sudo cp deploy/rooms-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rooms-bot
+[Unit]
+Description=Справочник Аватара — бот Rooms
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rooms
+Group=rooms
+WorkingDirectory=/opt/rooms-bot
+ExecStart=/opt/rooms-bot/.venv/bin/python /opt/rooms-bot/run.py
+Restart=on-failure
+RestartSec=5
+# Журнал и секреты доступны только службе
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/rooms-bot/data /opt/rooms-bot/content /opt/rooms-bot/backups
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
