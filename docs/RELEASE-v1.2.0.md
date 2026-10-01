@@ -22,26 +22,46 @@
 
 **Для сервера:** `deploy/rooms-bot.service` — готовый systemd-юнит. Раздел «Быстрые команды» в начале README.
 
-## Установка и обновление на Ubuntu в контуре
+## Требования
+
+- **Ubuntu, 64-разрядный Python 3.10 или новее** (проверено на 3.10–3.13).
+- Доступ к **внутреннему зеркалу PyPI** — это единственный способ поставить зависимости,
+  если каталог `wheels/` пуст. Docker и docker compose не нужны.
+- Версии в `requirements.txt` заданы диапазонами, чтобы зеркало могло отдать то, что у него есть.
+
+## Установка на Ubuntu в контуре
 
 ```bash
-# поставить с нуля
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
 tar xzf ~/rooms-bot-1.2.0.tar.gz --strip-components=1 -C /opt/rooms-bot
-cd /opt/rooms-bot && ./setup.sh --offline && ./start.sh
-
-# обновить работающую установку
-cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --offline --service rooms-bot
+cd /opt/rooms-bot
+./setup.sh --index-url "https://ВНУТРЕННИЙ-PYPI/simple"
+./start.sh
 ```
 
-Нужен 64-разрядный Python 3.12. Для `--offline` в `wheels/` должен лежать полный набор пакетов под Linux;
-иначе `--index-url https://ВНУТРЕННИЙ-PYPI/simple`.
+## Обновление работающей установки
+
+```bash
+cd /opt/rooms-bot
+./update.sh ~/rooms-bot-1.2.0.tar.gz --index-url "https://ВНУТРЕННИЙ-PYPI/simple" --service rooms-bot
+```
+
+`.env`, журнал `data/` и содержание `content/` остаются от установки; при ошибке код откатывается
+из `backups/`.
+
+Если внутреннего зеркала нет, соберите набор пакетов на машине с доступом в сеть — на такой же ОС,
+архитектуре и версии Python — и положите в `wheels/`, тогда работает `--offline`:
+
+```bash
+pip download -r requirements.txt -d wheels
+```
 
 Включить ИИ: в `.env` задать `AI_ENABLED=true`, `AI_URL` (вместе с `/v1`), `AI_MODEL`, перезапустить.
 
 ## Что в архиве
 
-Код, содержание, тесты, systemd-юнит — 74 файла. Не входят: секреты и `.env`, журнал `data/`,
+Код, содержание, тесты, systemd-юнит — 75 файлов. Каталог `wheels/` пуст: пакеты ставятся
+из внутреннего зеркала PyPI либо собираются отдельно (см. выше). Не входят: секреты и `.env`, журнал `data/`,
 слепки документов, очередь проверки, внутренние материалы в `.docx`.
 Контрольная сумма — в `rooms-bot-1.2.0.tar.gz.sha256`.
 

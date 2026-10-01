@@ -43,18 +43,26 @@ def main(argv=None):
     parser.add_argument("--secure", action="store_true", help="создать .env со случайными секретами")
     args = parser.parse_args(argv)
 
-    if sys.version_info[:2] != (3, 12) or struct.calcsize("P") != 8:
-        raise SystemExit("Нужен Python 3.12 (64-bit). Текущая версия: " + sys.version.split()[0])
+    if sys.version_info[:2] < (3, 10) or struct.calcsize("P") != 8:
+        raise SystemExit("Нужен 64-разрядный Python 3.10 или новее. Текущая версия: " + sys.version.split()[0])
 
     index_url = args.index_url or os.getenv("PIP_INDEX_URL")
     # Явный внутренний индекс имеет приоритет над случайно оставшимся неполным wheelhouse.
     offline = args.offline or (not index_url and wheelhouse_ready())
     if args.offline and not wheelhouse_ready():
-        raise SystemExit("В wheels/ нет .whl файлов. Скопируйте полный wheelhouse для Python 3.12 и этой ОС.")
+        raise SystemExit(
+            "В wheels/ нет .whl файлов. Либо укажите внутренний PyPI через --index-url, "
+            "либо соберите wheelhouse на машине с доступом в сеть:\n"
+            "  pip download -r requirements.txt -d wheels   (та же ОС, архитектура и версия Python)"
+        )
     try:
         command = pip_command(venv_python(), "requirements-dev.txt" if args.dev else "requirements.txt", index_url, offline)
     except ValueError as error:
-        raise SystemExit(str(error) + ". Публичный PyPI автоматически не используется.") from None
+        raise SystemExit(
+            str(error) + ".\nПубличный PyPI автоматически не используется. Варианты:\n"
+            "  1) ./setup.sh --index-url https://ВНУТРЕННИЙ-PYPI/simple\n"
+            "  2) положить wheel-файлы в wheels/ и повторить с --offline"
+        ) from None
 
     if not venv_python().exists():
         print("Создаю .venv …")

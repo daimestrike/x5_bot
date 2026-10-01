@@ -1,20 +1,13 @@
-Place the approved Linux wheelhouse here before offline build or CI. Include ALL transitive
-dependencies from requirements-dev.txt for the same Python version and architecture as
-PYTHON_IMAGE. Obtain packages from the corporate mirror in a trusted preparation environment.
-Do not copy a macOS wheelhouse into a Linux image. This source archive contains no binary wheels.
-For repeatable releases record wheel SHA256 checksums and pin the internal base image digest.
+Каталог для wheel-файлов. **В поставке он пуст** — двоичные пакеты в архив не кладутся.
 
-For a server installation without Docker, production dependencies are enough. Prepare them on a
-machine with the same operating system, architecture and Python 3.12:
+Нужен только для установки без внутреннего зеркала PyPI (`./setup.sh --offline`).
+Соберите набор на машине с доступом в сеть, на **такой же ОС, архитектуре и версии Python**,
+что и на сервере (Ubuntu, Python 3.10+):
 
-    python3.12 -m pip download --only-binary=:all: -r requirements.txt -d wheels \
-      --index-url https://<internal-pypi>/simple
+    pip download -r requirements.txt -d wheels
 
-Copy the complete project archive with `wheels/*.whl` into the closed contour, then run:
+Для прогонa тестов на сервере — `requirements-dev.txt` вместо `requirements.txt`.
+Набор должен включать все транзитивные зависимости. Wheelhouse с macOS на Linux не подходит.
+Если внутреннее зеркало PyPI доступно, этот каталог не нужен:
 
-    python3 install.py --offline
-    python3 run.py
-
-The project uses plain Uvicorn without optional `standard` extras, so the wheelhouse does not need
-uvloop, httptools, watchfiles or websockets. It still must contain every transitive dependency selected
-by pip for `requirements.txt`.
+    ./setup.sh --index-url "https://ВНУТРЕННИЙ-PYPI/simple"

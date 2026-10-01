@@ -10,14 +10,16 @@
 
 ## Быстрые команды
 
-Сервер Ubuntu в контуре без интернета. Архив скачивается снаружи и копируется на сервер.
+Сервер Ubuntu в контуре без внешнего интернета, **Python 3.10 или новее**, Docker не нужен.
+Архив скачивается снаружи и копируется на сервер. Зависимости ставятся из внутреннего зеркала PyPI —
+подставьте его адрес вместо `ВНУТРЕННИЙ-PYPI`.
 
 **Обновить работающую установку** — данные, `.env` и содержание сохраняются, при ошибке откат:
 
 ```bash
 scp rooms-bot-*.tar.gz* rooms@СЕРВЕР:~/            # с машины, где есть интернет
 ssh rooms@СЕРВЕР
-cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --offline --service rooms-bot
+cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --index-url "https://ВНУТРЕННИЙ-PYPI/simple" --service rooms-bot
 ```
 
 **Поставить с нуля:**
@@ -25,7 +27,9 @@ cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --offline --service ro
 ```bash
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
 tar xzf ~/rooms-bot-1.2.0.tar.gz --strip-components=1 -C /opt/rooms-bot
-cd /opt/rooms-bot && ./setup.sh --offline && ./start.sh
+cd /opt/rooms-bot
+./setup.sh --index-url "https://ВНУТРЕННИЙ-PYPI/simple"
+./start.sh
 ```
 
 **Проверить и посмотреть:**
@@ -50,9 +54,14 @@ ls backups/                                         # pre-update-ГГГГММД�
 cp -r backups/pre-update-*/code/. .  && sudo systemctl restart rooms-bot
 ```
 
-Если `--offline` не проходит, в `wheels/` нет полного набора пакетов для Linux и Python 3.12 —
-соберите wheelhouse снаружи (`pip download -r requirements.txt -d wheels`) или укажите внутренний
-индекс: `--index-url https://ВНУТРЕННИЙ-PYPI/simple`.
+Если внутреннего зеркала PyPI нет, соберите пакеты на машине с доступом в сеть — на такой же ОС,
+архитектуре и версии Python — положите в `wheels/` и ставьте с `--offline`:
+
+```bash
+pip download -r requirements.txt -d wheels        # снаружи контура
+```
+
+Третьего пути нет: публичный PyPI установщик не использует намеренно.
 
 ## Как выглядит диалог
 
@@ -67,13 +76,13 @@ cp -r backups/pre-update-*/code/. .  && sudo systemctl restart rooms-bot
 
 ## Проверка проекта локально
 
-Python **3.12**, зависимости из разрешённого зеркала либо подготовленного wheelhouse:
+Python **3.10 или новее**, зависимости из разрешённого зеркала либо подготовленного wheelhouse:
 
 ### Запуск из скачанного ZIP без Docker
 
 Готовые блоки команд для копирования: [QUICKSTART.md](QUICKSTART.md).
 
-1. Установите 64-разрядный Python 3.12.
+1. Установите 64-разрядный Python 3.10 или новее.
 2. Распакуйте архив репозитория и откройте терминал в каталоге проекта.
 3. Выполните один из вариантов установки:
 
@@ -91,7 +100,7 @@ python3 install.py --offline
 python3 run.py
 ```
 
-На Windows используйте `py -3.12 install.py ...` и `py -3.12 run.py` либо `setup.cmd` и `start.cmd`.
+На Windows используйте `py -3 install.py ...` и `py -3 run.py` либо `setup.cmd` и `start.cmd`.
 На Linux доступны `./setup.sh ...` и `./start.sh`. Установщик создаёт `.venv`, устанавливает зависимости,
 создаёт `.env`, если его ещё нет, и проверяет 35 карточек. Повторный запуск не перезаписывает `.env`.
 
@@ -102,7 +111,7 @@ python3 run.py --check
 ```
 
 Установщик намеренно не обращается к публичному PyPI. В полностью изолированном контуре архив должен
-содержать `wheels/*.whl` для той же ОС, архитектуры и Python 3.12. Подготовка такого каталога описана в
+содержать `wheels/*.whl` для той же ОС, архитектуры и версии Python. Подготовка такого каталога описана в
 [wheels/README.md](wheels/README.md).
 
 ### Ручная установка для разработчика
@@ -311,7 +320,9 @@ python scripts/backup.py backups/bot.sqlite3
 
 CI: внутренний образ `PYTHON_IMAGE`, установка только из `wheels/`, валидация, Ruff, pytest, ZIP-артефакт. Подготовьте Linux wheels для архитектуры и Python целевого сервера, включая транзитивные зависимости. См. [wheels/README.md](wheels/README.md).
 
-Docker собирается без доступа к публичным реестрам пакетов:
+Docker — **необязательный** путь: на целевом сервере его может не быть, и всё работает
+через `setup.sh` / `start.sh` и systemd-юнит из `deploy/`. Если Docker с compose всё же доступен,
+образ собирается без доступа к публичным реестрам пакетов:
 
 ```sh
 docker compose up --build -d
