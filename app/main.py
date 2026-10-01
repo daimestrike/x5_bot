@@ -13,12 +13,15 @@ from pathlib import Path
 
 import jwt
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+from .assistant import Assistant
 from .config import Settings
 from .content import Catalog
 from .delivery import Delivery, QueueFull
 from .engine import Engine, validate_event
+from .llm import LLM, LLMError
 from .metrics import product_metrics
 from .review import ContentStore, ReviewError, source_change_items
 from .sources import MAX_DOC_BYTES, SourceError, SourceStore, match_cards
@@ -65,12 +68,18 @@ def create_app(settings=None):
     settings = settings or Settings.from_env()
     settings.validate()
     os.umask(0o077)
+    catalog = Catalog(settings.content_dir, production=settings.mode == "production")
+    sources = SourceStore(settings.content_dir)
+    llm = LLM(settings)
+    assistant = Assistant(settings, catalog, sources, llm, LOG.info,
+                          cache_path=Path(settings.db_path).with_name("embeddings.sqlite3"))
     engine = Engine(
-        Catalog(settings.content_dir, production=settings.mode == "production"),
+        catalog,
         settings.db_path,
         settings.state_secret,
         settings.session_ttl,
         settings.retention_days,
+        assistant=assistant,
     )
     rooms = RoomsClient(settings)
     delivery = Delivery(engine, rooms)
@@ -173,7 +182,9 @@ def create_app(settings=None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "mode": settings.mode, "rooms_verified": settings.rooms_contract_confirmed}
+        return {"status": "ok", "mode": settings.mode, "rooms_verified": settings.rooms_contract_confirmed,
+                "ai": {"enabled": assistant.enabled, "model": llm.model if assistant.enabled else "",
+                       "embeddings": llm.embeddings_enabled}}
 
     @app.get("/ready")
     async def ready():
@@ -204,7 +215,9 @@ def create_app(settings=None):
         event = await body(request)
         if event is not None:
             try:
-                engine.handle(event, deferred=True, enqueue=delivery.enqueue(event["conversation_id"]))
+                await run_in_threadpool(
+                    engine.handle, event, deferred=True, enqueue=delivery.enqueue(event["conversation_id"])
+                )
             except QueueFull:
                 raise HTTPException(503, "queue_full_retry_later") from None
             except ValueError:
@@ -238,7 +251,7 @@ def create_app(settings=None):
             authorize(request)
             event = await body(request, console=True)
             try:
-                return engine.handle(event)
+                return await run_in_threadpool(engine.handle, event)
             except ValueError:
                 raise HTTPException(409, "event_conflict") from None
 
@@ -258,12 +271,12 @@ def create_app(settings=None):
 
     # ------------------------------------------------------------------ содержание
     store = ContentStore(settings.content_dir)
-    sources = SourceStore(settings.content_dir)
 
     def reload_catalog():
         """Перечитать карточки. В production бот остаётся на прежней версии, пока новая не утверждена."""
         try:
             engine.catalog = Catalog(settings.content_dir, production=settings.mode == "production")
+            assistant.reload(engine.catalog)  # индекс базы знаний ИИ пересоберётся при следующем вопросе
             return True
         except (ValueError, KeyError, TypeError) as e:
             LOG.warning("content_not_reloaded: %s", e)
@@ -284,6 +297,19 @@ def create_app(settings=None):
     async def content_css():
         return FileResponse(STATIC / "content.css", media_type="text/css")
 
+    @app.get("/content/api/ai/check")
+    async def ai_check(request: Request):
+        """Проверка связи с моделью со страницы «Содержание»: URL, модель, тестовый ответ."""
+        authorize(request, admin=True)
+        if not settings.ai_enabled:
+            return {"enabled": False, "reason": "AI_ENABLED=false — бот отвечает строго по меню"}
+        try:
+            result = await run_in_threadpool(llm.check)
+        except LLMError as e:
+            return {"enabled": True, "ok": False, "code": e.code, "error": str(e)}
+        chunks = len(assistant.rag.get_index().chunks)
+        return {**result, "ok": True, "chunks": chunks, "vectors": len(assistant.rag.vectors)}
+
     @app.get("/content/api/state")
     async def content_state(request: Request):
         authorize(request, admin=True)
@@ -299,6 +325,9 @@ def create_app(settings=None):
                 for c in cards
             ],
             "sources": sources.list(),
+            "ai": {"enabled": assistant.enabled, "model": llm.model, "url": llm.url,
+                   "embeddings": llm.embeddings_enabled,
+                   "chunks": len(assistant.rag.get_index().chunks) if assistant.enabled else None},
             "queue": store.open_items(),
             "resolved": [i for i in store.read_queue() if i["status"] != "open"][-50:],
         }

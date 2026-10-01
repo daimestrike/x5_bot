@@ -30,6 +30,7 @@
       <button type="button" data-tab="queue" class="active">Очередь <span class="count" id="c-queue">0</span></button>
       <button type="button" data-tab="cards">Карточки <span class="count" id="c-cards">0</span></button>
       <button type="button" data-tab="sources">Источники <span class="count" id="c-sources">0</span></button>
+      <button type="button" data-tab="ai">ИИ <span class="count" id="c-ai">—</span></button>
     </div>
   </div>
 </section>
@@ -83,6 +84,24 @@
       <div class="block-head"><h2>Слепки источников</h2></div>
       <div class="tablewrap"><table id="sources"><thead><tr><th>Ключ</th><th>Название</th><th>Файл</th><th class="num">Версия</th><th class="num">Фрагментов</th><th>Загружен</th><th>Карточек связано автоматически</th></tr></thead><tbody></tbody></table></div>
       <p id="sources-empty" class="empty" hidden>Слепков ещё нет — загрузите текущие версии документов, чтобы было с чем сравнивать.</p>
+    </div>
+  </section>
+  <section id="tab-ai" class="tab" hidden>
+    <div class="block">
+      <div class="block-head"><h2>ИИ-ответ по базе знаний</h2><span class="sub" id="ai-state">—</span></div>
+      <p class="desc">Когда ИИ включён, бот отвечает на вопросы, написанные фразой: ищет фрагменты в карточках
+        и загруженных документах (RAG) и просит модель ответить <b>только по ним</b>, со ссылками на карточки
+        вида [A-07]. Если модель не сослалась ни на одну карточку, ответ помечается как неподтверждённый.
+        Меню, поиск по словам и оценки работают как раньше; при недоступности модели бот возвращается
+        к обычному ответу по меню. Модель и эмбеддинги — внутри контура, адрес задаётся в <code>AI_URL</code>.</p>
+      <div class="ai-grid">
+        <div><h3>Состояние</h3><table class="kv"><tbody id="ai-info"></tbody></table></div>
+        <div><h3>Проверка связи</h3>
+          <p class="desc">Запрашивает список моделей и короткий тестовый ответ. Персональных данных не отправляет.</p>
+          <button type="button" class="sm primary" id="ai-check">Проверить связь с моделью</button>
+          <pre id="ai-result" class="ai-result" hidden></pre>
+        </div>
+      </div>
     </div>
   </section>
 </main>

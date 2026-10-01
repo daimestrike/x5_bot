@@ -295,6 +295,16 @@ class SourceStore:
         p = self.path(key)
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
+    def all(self):
+        """Полные слепки с текстом — для индекса базы знаний ИИ."""
+        out = []
+        for path in sorted(self.dir.glob("*.json")):
+            try:
+                out.append(json.loads(path.read_text(encoding="utf-8")))
+            except ValueError:
+                continue
+        return out
+
     def list(self):
         out = []
         for p in sorted(self.dir.glob("*.json")):

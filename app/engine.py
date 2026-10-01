@@ -18,6 +18,7 @@ WELCOME = (
 MENU = {"label": "Меню", "action": "menu"}
 SEARCH = {"label": "Поиск", "action": "search"}
 HELP = {"label": "Помощь человека", "action": "help"}
+AI_TOPIC = "AI"  # псевдокарточка в views: ИИ-ответ оценивается теми же кнопками
 REASONS = {"wrong": "Не то, что искал", "details": "Не хватает деталей", "failed": "Сделал, не сработало"}
 
 
@@ -51,8 +52,9 @@ def validate_event(e):
 
 
 class Engine:
-    def __init__(self, catalog, db_path, secret, session_ttl=14400, retention_days=30):
+    def __init__(self, catalog, db_path, secret, session_ttl=14400, retention_days=30, assistant=None):
         self.catalog, self.db_path, self.secret = catalog, str(db_path), secret.encode()
+        self.assistant = assistant
         self.session_ttl, self.retention = session_ttl, retention_days * 86400
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
@@ -131,6 +133,9 @@ class Engine:
         pid = self.participant(event["user_id"])
         eid = self.digest(json.dumps([sid, event["event_id"]]))
         fingerprint = self.digest(json.dumps(event, sort_keys=True, ensure_ascii=False))
+        # Запрос к модели делается до BEGIN IMMEDIATE: ожидание сети не должно
+        # держать блокировку записи, иначе параллельные диалоги встанут.
+        prepared = self.prepare_ai(event, eid)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.cleanup(db, now)
@@ -157,7 +162,7 @@ class Engine:
                 if event["type"] == "opened":
                     messages = [] if active else [screen("S0", WELCOME)]
                 else:
-                    messages = ([] if active else [screen("S0", WELCOME)]) + [self.respond(db, sid, event, now)]
+                    messages = ([] if active else [screen("S0", WELCOME)]) + [self.respond(db, sid, event, now, prepared)]
             # A new delivery attempt for a still-undelivered appeal must confirm the same
             # appeal, rather than leaving its metric bound to a failed earlier request.
             if deferred:
@@ -225,7 +230,54 @@ class Engine:
         text += " Если нужно срочно — запросите помощь."
         return screen("S8", text, [HELP, MENU])
 
-    def respond(self, db, sid, e, now):
+    # ------------------------------------------------------------------ ИИ
+    def ai_candidate(self, event):
+        """Текст, по которому нужен ИИ-ответ, или None (команды и поиск по словам — без модели)."""
+        if not (self.assistant and self.assistant.enabled) or event.get("type") != "message":
+            return None
+        raw = event.get("text", "")
+        text = normalized(raw)
+        if text in ("меню", "/menu", "/start", "поиск", "/search", "помощь", "помощь человека", "/help",
+                    "спасибо", "ок", "спс", "благодарю"):
+            return None
+        short = len(text.split()) <= 2 and re.fullmatch(r"[а-яa-z -]{1,60}", text)
+        if short and self.catalog.search(text):
+            return None  # обычный поиск по словам нашёл темы — модель не нужна
+        return raw if self.assistant.wants(raw) else None
+
+    def prepare_ai(self, event, eid):
+        """Ответ модели, полученный вне транзакции. None — работаем по меню, как раньше."""
+        question = self.ai_candidate(event)
+        if question is None:
+            return None
+        with self.connect() as db:  # повтор того же события — ответ уже в кэше, модель не трогаем
+            if db.execute("SELECT 1 FROM dedup WHERE eid=?", (eid,)).fetchone():
+                return None
+        return self.assistant.safe_answer(question)
+
+    def ai_screen(self, db, sid, now, answer):
+        """Экран S9: ответ модели со ссылками на карточки и оценкой."""
+        view = uuid.uuid4().hex
+        db.execute(
+            "INSERT INTO views(id,sid,card,version,section,url,created) VALUES(?,?,?,?,?,?,?)",
+            (view, sid, AI_TOPIC, answer.model[:60] or "ai", "", self.catalog.settings.get("fallback_url") or "", now),
+        )
+        self.log(db, now, "ai_answer", topic=answer.cards[0] if answer.cards else None,
+                 version=answer.model[:60] or "ai", value="grounded" if answer.grounded else "ungrounded",
+                 interaction=view)
+        text = answer.text
+        if not answer.grounded:
+            text += "\n\nВ справочнике нет точного ответа — проверьте по меню или спросите ревизора."
+        buttons = [{"label": self.catalog.cards[c]["title"], "action": "card:" + c} for c in answer.cards[:3]
+                   if c in self.catalog.cards]
+        buttons += [
+            {"label": "Помогло", "action": "rate:" + view + ":yes"},
+            {"label": "Не помогло", "action": "rate:" + view + ":no"},
+            MENU,
+        ]
+        return screen("S9", text, buttons)
+
+    def respond(self, db, sid, e, now, prepared=None):
         if e["type"] == "attachment":
             kind = e.get("attachment_type")
             self.log(db, now, "attachment", value=kind if kind in ("audio", "image", "file", "video") else "other")
@@ -241,11 +293,15 @@ class Engine:
             if text in ("помощь", "помощь человека", "/help"):
                 return self.help()
             if len(text.split()) > 2 or not re.fullmatch(r"[а-яa-z -]{1,60}", text):
+                if prepared is not None:
+                    return self.ai_screen(db, sid, now, prepared)
                 self.log(db, now, "unknown_input", value="redacted")
                 return self.unknown()
             matches = self.catalog.search(text)
             self.log(db, now, "search" if matches else "search_miss", value="matched" if matches else "redacted")
             if not matches:
+                if prepared is not None:
+                    return self.ai_screen(db, sid, now, prepared)
                 return screen(
                     "S5b",
                     "Ничего не нашёл. Выберите раздел в меню или спросите ревизора. "
@@ -358,7 +414,7 @@ class Engine:
             rows = db.execute(
                 "SELECT kind,topic,version,value,COUNT(*) AS count FROM events e WHERE delivered=1 "
                 "AND (kind NOT IN ('rating','reason') OR EXISTS (SELECT 1 FROM events v "
-                "WHERE v.kind='card' AND v.interaction=e.interaction AND v.delivered=1)) "
+                "WHERE v.kind IN ('card','ai_answer') AND v.interaction=e.interaction AND v.delivered=1)) "
                 "GROUP BY kind,topic,version,value"
             ).fetchall()
         groups = [dict(r) for r in rows]

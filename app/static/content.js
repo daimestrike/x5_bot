@@ -194,6 +194,41 @@
     } catch (err) { status(err.message, true); }
   });
 
+  // ------------------------------------------------------------ ИИ
+  function renderAi() {
+    const ai = state.ai || {};
+    $('c-ai').textContent = ai.enabled ? 'вкл' : 'выкл';
+    $('ai-state').innerHTML = ai.enabled
+      ? `<span class="ai-badge on">включён</span>`
+      : `<span class="ai-badge off">выключен</span>`;
+    const rows = ai.enabled
+      ? [['Модель', ai.model || '—'], ['Адрес', ai.url || '—'],
+         ['Эмбеддинги', ai.embeddings ? 'включены (гибридный поиск)' : 'выключены (поиск BM25)'],
+         ['Фрагментов в индексе', ai.chunks == null ? '—' : ai.chunks],
+         ['Карточек в базе', state.cards.length], ['Документов в базе', state.sources.length]]
+      : [['Как включить', 'AI_ENABLED=true, AI_URL и AI_MODEL в .env, затем перезапуск'],
+         ['Пока выключен', 'бот отвечает строго по меню и поиску — как в MVP']];
+    $('ai-info').innerHTML = rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+  }
+
+  $('ai-check').addEventListener('click', async () => {
+    const out = $('ai-result');
+    out.hidden = false;
+    out.textContent = 'Проверяю…';
+    try {
+      const r = await api('/content/api/ai/check');
+      if (!r.enabled) out.textContent = 'ИИ выключен: ' + (r.reason || '');
+      else if (r.ok === false) out.textContent = `Ошибка (${r.code}): ${r.error}`;
+      else out.textContent = [
+        'Связь есть.',
+        'Модель: ' + (r.model || '—'),
+        'Тестовый ответ: ' + (r.answer || '—'),
+        'Доступные модели: ' + ((r.models || []).join(', ') || (r.models_error || '—')),
+        'Фрагментов в индексе: ' + r.chunks + (r.embeddings ? `, векторов: ${r.vectors}` : ''),
+      ].join('\n');
+    } catch (e) { out.textContent = 'Ошибка: ' + e.message; }
+  });
+
   // ------------------------------------------------------------ вкладки и загрузка
   $('tabs').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-tab]');
@@ -213,7 +248,7 @@
       $('c-sources').textContent = state.sources.length;
       $('mode').hidden = false;
       $('mode').textContent = state.mode === 'production' ? 'Режим production: правки применяются в боте только после утверждения всех карточек.' : 'Режим demo: правки видны в тестовой консоли сразу, черновики помечаются.';
-      renderQueue(); renderCards(); renderSources();
+      renderQueue(); renderCards(); renderSources(); renderAi();
       try { sessionStorage.setItem('metrics_token', token()); sessionStorage.setItem('who', who()); } catch (e) { /* ignore */ }
     } catch (e) { status(e.message, true); }
   }

@@ -40,6 +40,21 @@ class Settings:
     rooms_kc_header: str = "X-Keycloak-Token"
     rooms_token_url: str = ""
     rooms_send_url: str = ""
+    # ИИ-ответ по базе знаний (RAG). Выключен по умолчанию: без AI_URL бот работает строго по меню.
+    ai_enabled: bool = False
+    ai_url: str = ""
+    ai_model: str = ""
+    ai_api_key: str = ""
+    ai_timeout: float = 30.0
+    ai_temperature: float = 0.1
+    ai_max_tokens: int = 500
+    ai_embed_model: str = ""
+    ai_embed_url: str = ""
+    ai_ca_file: str = ""
+    ai_verify_tls: bool = True
+    ai_use_system_proxy: bool = False
+    ai_extra_json: str = ""
+    ai_min_words: int = 2
 
     @classmethod
     def from_env(cls):
@@ -67,6 +82,20 @@ class Settings:
             rooms_kc_header=os.getenv("ROOMS_KC_HEADER", "X-Keycloak-Token"),
             rooms_token_url=os.getenv("ROOMS_TOKEN_URL", ""),
             rooms_send_url=os.getenv("ROOMS_SEND_URL", ""),
+            ai_enabled=boolean("AI_ENABLED", False),
+            ai_url=os.getenv("AI_URL", "").strip(),
+            ai_model=os.getenv("AI_MODEL", "").strip(),
+            ai_api_key=os.getenv("AI_API_KEY", "").strip(),
+            ai_timeout=float(os.getenv("AI_TIMEOUT", "30")),
+            ai_temperature=float(os.getenv("AI_TEMPERATURE", "0.1")),
+            ai_max_tokens=int(os.getenv("AI_MAX_TOKENS", "500")),
+            ai_embed_model=os.getenv("AI_EMBED_MODEL", "").strip(),
+            ai_embed_url=os.getenv("AI_EMBED_URL", "").strip(),
+            ai_ca_file=os.getenv("AI_CA_FILE", "").strip(),
+            ai_verify_tls=boolean("AI_VERIFY_TLS", True),
+            ai_use_system_proxy=boolean("AI_USE_SYSTEM_PROXY", False),
+            ai_extra_json=os.getenv("AI_EXTRA_JSON", ""),
+            ai_min_words=int(os.getenv("AI_MIN_WORDS", "2")),
         )
         s.validate()
         return s
@@ -83,6 +112,10 @@ class Settings:
             raise ValueError("Invalid session TTL or retention")
         if not 1 <= self.requests_per_minute <= 100000:
             raise ValueError("Invalid rate limit")
+        if self.ai_enabled and not (self.ai_url and self.ai_model):
+            raise ValueError("AI_ENABLED=true требует AI_URL и AI_MODEL")
+        if not 1 <= self.ai_timeout <= 300 or not 0 <= self.ai_temperature <= 2 or not 16 <= self.ai_max_tokens <= 4000:
+            raise ValueError("Invalid AI_TIMEOUT / AI_TEMPERATURE / AI_MAX_TOKENS")
         if self.mode == "production":
             from urllib.parse import urlsplit
 
@@ -110,6 +143,15 @@ class Settings:
                 value = getattr(self, name)
                 if value and urlsplit(value).scheme != "https":
                     raise ValueError(name.upper() + " must be an HTTPS URL")
+            if self.ai_enabled:
+                for name in ("ai_url", "ai_embed_url"):
+                    value = getattr(self, name)
+                    if value and urlsplit(value).scheme not in ("https", "http"):
+                        raise ValueError(name.upper() + ": ожидается URL")
+                    if value and urlsplit(value).scheme == "http" and urlsplit(value).hostname not in (
+                        "localhost", "127.0.0.1", "::1"
+                    ):
+                        raise ValueError(name.upper() + " must be HTTPS outside localhost")
 
     @property
     def token_url(self):

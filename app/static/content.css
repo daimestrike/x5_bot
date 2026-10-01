@@ -56,3 +56,15 @@ td.actions{white-space:nowrap}
 .actions button.primary{background:var(--green);border-color:var(--green);color:#fff}
 .actions button.ghost{background:transparent;color:var(--ink-3)}
 @media(max-width:640px){#ed-form .two{grid-template-columns:1fr}.auth .who{display:none}}
+
+/* вкладка ИИ */
+.ai-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.ai-grid h3{margin:0 0 8px;font-size:14px;font-weight:700;color:var(--green-deep)}
+.kv td{padding:6px 10px 6px 0;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+.kv td:first-child{color:var(--ink-3);white-space:nowrap;width:40%}
+.ai-result{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--bg-2);font-size:13px;
+  white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto}
+.ai-badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.ai-badge.on{background:var(--green-soft);color:var(--green-deep)}
+.ai-badge.off{background:var(--bg-2);color:var(--ink-3)}
+@media(max-width:820px){.ai-grid{grid-template-columns:1fr}}
