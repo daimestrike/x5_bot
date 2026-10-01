@@ -10,26 +10,22 @@
 
 ## Быстрые команды
 
-Сервер Ubuntu в контуре без внешнего интернета, **Python 3.10 или новее**, Docker не нужен.
-Архив скачивается снаружи и копируется на сервер. Зависимости ставятся из внутреннего зеркала PyPI —
-подставьте его адрес вместо `ВНУТРЕННИЙ-PYPI`.
+Сервер Ubuntu, **Python 3.10 (x86_64)**. Ни интернета, ни Docker, ни pip, ни внутреннего зеркала
+PyPI не нужно: зависимости лежат в архиве, в каталоге `vendor/`.
+
+**Поставить с нуля** — три команды:
+
+```bash
+scp rooms-bot-*.tar.gz* rooms@СЕРВЕР:~/            # с машины, где есть интернет
+sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
+tar xzf ~/rooms-bot-1.3.0.tar.gz --strip-components=1 -C /opt/rooms-bot
+cd /opt/rooms-bot && ./setup.sh && ./start.sh
+```
 
 **Обновить работающую установку** — данные, `.env` и содержание сохраняются, при ошибке откат:
 
 ```bash
-scp rooms-bot-*.tar.gz* rooms@СЕРВЕР:~/            # с машины, где есть интернет
-ssh rooms@СЕРВЕР
-cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.2.0.tar.gz --index-url "https://ВНУТРЕННИЙ-PYPI/simple" --service rooms-bot
-```
-
-**Поставить с нуля:**
-
-```bash
-sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
-tar xzf ~/rooms-bot-1.2.0.tar.gz --strip-components=1 -C /opt/rooms-bot
-cd /opt/rooms-bot
-./setup.sh --index-url "https://ВНУТРЕННИЙ-PYPI/simple"
-./start.sh
+cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.3.0.tar.gz --service rooms-bot
 ```
 
 **Проверить и посмотреть:**
@@ -54,14 +50,17 @@ ls backups/                                         # pre-update-ГГГГММД�
 cp -r backups/pre-update-*/code/. .  && sudo systemctl restart rooms-bot
 ```
 
-Если внутреннего зеркала PyPI нет, соберите пакеты на машине с доступом в сеть — на такой же ОС,
-архитектуре и версии Python — положите в `wheels/` и ставьте с `--offline`:
+**Если на сервере другой Python или архитектура** — пересоберите `vendor/` на машине с интернетом
+и соберите архив заново:
 
 ```bash
-pip download -r requirements.txt -d wheels        # снаружи контура
+python scripts/vendor.py --python-version 3.11 --arch aarch64
+python scripts/package.py --name rooms-bot-1.3.0
 ```
 
-Третьего пути нет: публичный PyPI установщик не использует намеренно.
+Запасные пути, если `vendor/` в поставке нет: `./setup.sh --index-url "https://ВНУТРЕННИЙ-PYPI/simple"`
+либо собранный снаружи `wheels/` и `./setup.sh --offline`. Публичный PyPI установщик не использует
+намеренно.
 
 ## Как выглядит диалог
 

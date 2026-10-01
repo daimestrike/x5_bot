@@ -8,6 +8,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 VENV_PYTHON = ROOT / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+VENDOR = ROOT / "vendor"
+
+
+def use_vendor():
+    """Зависимости сложены в vendor/ — запускаемся текущим Python без venv и pip."""
+    if not VENDOR.is_dir():
+        return False
+    sys.path.insert(0, str(VENDOR))
+    return True
 
 
 def read_env(path):
@@ -35,15 +44,19 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="проверить конфигурацию и завершить работу")
     args = parser.parse_args(argv)
 
-    if not VENV_PYTHON.exists():
-        raise SystemExit("Окружение не подготовлено. Сначала выполните: python install.py")
-    if Path(sys.executable).resolve() != VENV_PYTHON.resolve():
-        result = subprocess.run([str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]], cwd=ROOT)
-        raise SystemExit(result.returncode)
+    if not use_vendor():
+        if not VENV_PYTHON.exists():
+            raise SystemExit(
+                "Зависимости не найдены. Либо в поставке должен быть каталог vendor/, "
+                "либо подготовьте окружение: python install.py --index-url https://ВНУТРЕННИЙ-PYPI/simple"
+            )
+        if Path(sys.executable).resolve() != VENV_PYTHON.resolve():
+            result = subprocess.run([str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]], cwd=ROOT)
+            raise SystemExit(result.returncode)
 
     env_file = ROOT / ".env"
     if not env_file.exists():
-        raise SystemExit("Нет .env. Выполните python install.py или скопируйте .env.example в .env")
+        raise SystemExit("Нет .env. Выполните ./setup.sh или скопируйте .env.example в .env")
     try:
         for name, value in read_env(env_file).items():
             os.environ.setdefault(name, value)

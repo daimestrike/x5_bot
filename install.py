@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 VENV = ROOT / ".venv"
+VENDOR = ROOT / "vendor"
 
 
 def venv_python():
@@ -35,6 +36,17 @@ def pip_command(python, requirements, index_url=None, offline=False):
     return command + ["-r", str(ROOT / requirements)]
 
 
+def prepare_env(secure, python):
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        print(".env уже существует — оставляю без изменений.")
+        return
+    command = [str(python), str(ROOT / "scripts/init_env.py")]
+    if secure:
+        command.append("--secure")
+    subprocess.run(command, cwd=ROOT, check=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Подготовить Rooms-бот к запуску без Docker")
     parser.add_argument("--index-url", help="URL внутреннего PyPI (также читается из PIP_INDEX_URL)")
@@ -45,6 +57,14 @@ def main(argv=None):
 
     if sys.version_info[:2] < (3, 10) or struct.calcsize("P") != 8:
         raise SystemExit("Нужен 64-разрядный Python 3.10 или новее. Текущая версия: " + sys.version.split()[0])
+
+    if VENDOR.is_dir() and not args.dev:
+        # Зависимости уже лежат в поставке: ни сеть, ни pip, ни venv не нужны.
+        print("Зависимости найдены в vendor/ — устанавливать нечего.")
+        prepare_env(args.secure, sys.executable)
+        subprocess.run([sys.executable, str(ROOT / "scripts/validate_content.py")], cwd=ROOT, check=True)
+        print("\nГотово. Запуск: ./start.sh")
+        return
 
     index_url = args.index_url or os.getenv("PIP_INDEX_URL")
     # Явный внутренний индекс имеет приоритет над случайно оставшимся неполным wheelhouse.
@@ -70,15 +90,7 @@ def main(argv=None):
     print("Устанавливаю зависимости " + ("из wheels/ …" if offline else "из внутреннего PyPI …"))
     subprocess.run(command, cwd=ROOT, check=True)
 
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        init = [str(venv_python()), str(ROOT / "scripts/init_env.py")]
-        if args.secure:
-            init.append("--secure")
-        subprocess.run(init, cwd=ROOT, check=True)
-    else:
-        print(".env уже существует — оставляю без изменений.")
-
+    prepare_env(args.secure, venv_python())
     subprocess.run([str(venv_python()), str(ROOT / "scripts/validate_content.py")], cwd=ROOT, check=True)
     print("\nГотово. Запуск: python run.py")
     print("Демо-консоль: http://127.0.0.1:8080/dev/chat")

@@ -12,3 +12,4 @@ dist/
 report.xml
 journal.csv
 content/review/.validate/
+vendor/

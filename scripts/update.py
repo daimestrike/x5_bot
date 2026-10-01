@@ -7,6 +7,9 @@
 заменяет код, доустанавливает зависимости (из wheels/ или внутреннего PyPI), проверяет
 конфигурацию и запускает службу обратно. При ошибке откатывает код из резервной копии.
 
+vendor/ (зависимости из поставки) обновляется вместе с кодом, но в резервную копию не попадает:
+он восстанавливается из архива и занимает десятки мегабайт.
+
 Чего НЕ трогает — это данные установки, а не код:
     .env                      секреты и адреса
     data/                     журнал обращений и кэш эмбеддингов
@@ -30,7 +33,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 # Код: полностью заменяется содержимым архива
-CODE_DIRS = ("app", "scripts", "tests", "docs")
+CODE_DIRS = ("app", "scripts", "tests", "docs", "deploy", "vendor")
+# vendor/ занимает десятки мегабайт и восстанавливается из архива — в резервную копию не кладём
+BACKUP_SKIP = ("vendor",)
 CODE_FILES = (
     "run.py", "install.py", "setup.sh", "start.sh", "update.sh", "setup.cmd", "start.cmd",
     "requirements.txt", "requirements-dev.txt", "pytest.ini", "ruff.toml", "Makefile",
@@ -96,7 +101,7 @@ def backup(destination):
             shutil.copy2(source, target)
     for name in CODE_DIRS:
         source = ROOT / name
-        if source.exists():
+        if source.exists() and name not in BACKUP_SKIP:
             shutil.copytree(source, destination / "code" / name, dirs_exist_ok=True)
     for name in CODE_FILES:
         source = ROOT / name
@@ -113,6 +118,8 @@ def restore_code(backup_dir):
         if (code / name).exists():
             shutil.rmtree(ROOT / name, ignore_errors=True)
             shutil.copytree(code / name, ROOT / name)
+        elif name in BACKUP_SKIP:
+            say(f"  {name}/ в резервной копии нет — остаётся версия из нового архива")
     for name in CODE_FILES:
         if (code / name).exists():
             shutil.copy2(code / name, ROOT / name)

@@ -18,7 +18,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_DIRS = {"app", "content", "scripts", "tests", "docs", "wheels", "deploy"}
+ALLOWED_DIRS = {"app", "content", "scripts", "tests", "docs", "wheels", "deploy", "vendor"}
 ALLOWED_FILES = {
     "README.md",
     "QUICKSTART.md",
@@ -46,7 +46,7 @@ EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".ruff_cache", "review", "sour
 EXCLUDED_NAMES = set()
 # Архив нужен, чтобы запустить бота. Внутренние материалы (бизнес-кейс, пакет решений)
 # в него не кладём: их раздают отдельно и не через релиз репозитория.
-EXCLUDED_SUFFIXES = {".pyc", ".sqlite3", ".docx", ".xlsx", ".pptx", ".pdf", ".heic"}
+EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".sqlite3", ".docx", ".xlsx", ".pptx", ".pdf", ".heic"}
 
 
 def included():
