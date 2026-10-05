@@ -4,7 +4,7 @@
 получает короткую инструкцию: **Меню → раздел → тема → шаги → Помогло / Не помогло**. Вопрос можно
 написать и фразой — тогда отвечает **ИИ по базе знаний** со ссылками на карточки (включается в `.env`).
 
-**Релиз 1.3.1.** Архив самодостаточный: зависимости лежат внутри (`vendor/`), на сервере не нужны
+**Релиз 1.3.2.** Архив самодостаточный: зависимости лежат внутри (`vendor/`), на сервере не нужны
 интернет, pip, venv, Docker и зеркало PyPI. Логика — по «MVP бота Rooms.docx» и «Чек-листы_бота_Rooms.xlsx»
 ([docs/SOURCE-BASELINE.md](docs/SOURCE-BASELINE.md)). Подключение к самому Rooms ждёт контракта
 от администратора — что именно нужно, в [docs/ROOMS-INTEGRATION.md](docs/ROOMS-INTEGRATION.md).
@@ -20,14 +20,14 @@
 **Где взять архив.** На машине с интернетом скачайте с GitHub версию по тегу — в ней уже есть
 `vendor/` со всеми зависимостями:
 
-<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.1.tar.gz>  → файл `x5_bot-1.3.1.tar.gz`
+<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.2.tar.gz>  → файл `x5_bot-1.3.2.tar.gz`
 
 ```bash
-scp x5_bot-1.3.1.tar.gz ПОЛЬЗОВАТЕЛЬ@СЕРВЕР:~/
+scp x5_bot-1.3.2.tar.gz ПОЛЬЗОВАТЕЛЬ@СЕРВЕР:~/
 
 # на сервере
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
-tar xzf ~/x5_bot-1.3.1.tar.gz --strip-components=1 -C /opt/rooms-bot
+tar xzf ~/x5_bot-1.3.2.tar.gz --strip-components=1 -C /opt/rooms-bot
 cd /opt/rooms-bot
 ls vendor | head -3   # должно быть не пусто: annotated_doc, annotated_types, anyio…
 ./setup.sh            # создаёт .env и проверяет конфигурацию; ничего не скачивает
@@ -46,7 +46,7 @@ sh setup.sh && sh start.sh        # через sh: распаковка Python �
 ```
 </details>
 
-Архив `rooms-bot-1.3.1.tar.gz` из релиза — то же самое, только без тестовых и внутренних документов.
+Архив `rooms-bot-1.3.2.tar.gz` из релиза — то же самое, только без тестовых и внутренних документов.
 
 `setup.sh` должен закончиться строками `Конфигурация корректна: mode=demo, cards=35` и `Готово`.
 
@@ -175,9 +175,9 @@ cp -r backups/pre-update-ПОСЛЕДНЯЯ/code/. . && sudo systemctl restart r
 | Сообщение | Причина и решение |
 |---|---|
 | `Нужен 64-разрядный Python 3.10 или новее` | на сервере старый Python — нужен 3.10 |
-| `vendor/ собран под Python 3.10 linux x86_64, а запущен …` | другой Python или ARM. На машине с интернетом: `python scripts/vendor.py --python-version 3.X --arch x86_64\|aarch64`, затем `python scripts/package.py --name rooms-bot-1.3.1` |
+| `vendor/ собран под Python 3.10 linux x86_64, а запущен …` | другой Python или ARM. На машине с интернетом: `python scripts/vendor.py --python-version 3.X --arch x86_64\|aarch64`, затем `python scripts/package.py --name rooms-bot-1.3.2` |
 | `Нет .env` | выполните `./setup.sh` |
-| `Зависимости не найдены: каталога vendor/ нет` | скачан архив без `vendor/` (версия до 1.3.1 или ветка без него) — возьмите tar.gz по тегу v1.3.1 и новее |
+| `Зависимости не найдены: каталога vendor/ нет` | скачан архив без `vendor/` (версия до 1.3.2 или ветка без него) — возьмите tar.gz по тегу v1.3.2 и новее |
 | `Permission denied` на `./setup.sh` | распаковали ZIP средствами Python — запускайте `sh setup.sh`, `sh start.sh` |
 | `Address already in use` | порт занят: `PORT=8081` в `.env` или остановите прежний процесс |
 | `Конфигурация … ошибка` в `update.sh` | обновление отменено само, прежняя версия работает; пришлите текст ошибки |
@@ -188,7 +188,7 @@ cp -r backups/pre-update-ПОСЛЕДНЯЯ/code/. . && sudo systemctl restart r
 ```bash
 ./start.sh --check                    # конфигурация и содержание
 ./start.sh --check-ai                 # связь с моделью ИИ
-curl -s localhost:8080/health         # сервис жив, ИИ включён?
+curl -s localhost:8080/health         # сервис жив, какая версия, ИИ включён?
 ```
 
 ---
@@ -214,7 +214,7 @@ curl -s localhost:8080/health         # сервис жив, ИИ включён
 ```bash
 python scripts/vendor.py                    # зависимости под Linux x86_64 / Python 3.10 → vendor/
 python scripts/vendor.py --verify           # состав и формат двоичных файлов
-python scripts/package.py --name rooms-bot-1.3.1 --format tar
+python scripts/package.py --name rooms-bot-1.3.2 --format tar
 ```
 
 Версии зафиксированы в `requirements.lock` — повторная сборка даёт тот же набор, что проверен тестами;

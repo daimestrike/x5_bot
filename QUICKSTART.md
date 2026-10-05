@@ -6,7 +6,7 @@
 нужен только **Python 3.10 на Linux x86_64**. Ни интернета, ни pip, ни venv, ни Docker.
 
 ```bash
-tar xzf rooms-bot-1.3.1.tar.gz && cd rooms-bot-1.3.1
+tar xzf rooms-bot-1.3.2.tar.gz && cd rooms-bot-1.3.2
 ./setup.sh      # создаст .env и проверит содержание
 ./start.sh
 ```

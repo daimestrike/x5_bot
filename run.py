@@ -123,7 +123,9 @@ def main(argv=None):
     if args.check_ai:
         raise SystemExit(check_ai(app))
     if args.check:
-        print(f"Конфигурация корректна: mode={mode}, cards={len(app.state.engine.catalog.cards)}")
+        from app import __version__
+
+        print(f"Версия {__version__}. Конфигурация корректна: mode={mode}, cards={len(app.state.engine.catalog.cards)}")
         return
 
     import uvicorn

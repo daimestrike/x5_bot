@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+from . import __version__
 from .assistant import Assistant
 from .config import Settings
 from .content import Catalog
@@ -183,7 +184,8 @@ def create_app(settings=None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "mode": settings.mode, "rooms_verified": settings.rooms_contract_confirmed,
+        return {"status": "ok", "version": __version__, "mode": settings.mode,
+                "rooms_verified": settings.rooms_contract_confirmed,
                 "ai": {"enabled": assistant.enabled, "model": llm.model if assistant.enabled else "",
                        "embeddings": llm.embeddings_enabled}}
 

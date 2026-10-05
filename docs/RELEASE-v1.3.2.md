@@ -1,14 +1,29 @@
-# Релиз v1.3.1
+# Релиз v1.3.2
 
 Архив самодостаточный: зависимости внутри (`vendor/`). На сервере не нужны интернет, pip, venv,
 Docker и зеркало PyPI. Нужен **Ubuntu с Python 3.10 на x86_64** (Ubuntu 22.04).
+
+## Что нового в 1.3.2
+
+- **`vendor/` теперь в репозитории.** Архивы, которые отдаёт GitHub (по тегу и «Code → Download ZIP»),
+  собираются из git — в 1.3.1 `vendor/` в них был пустым, и на сервере бот не запускался.
+  Теперь любой архив с GitHub — готовая поставка.
+- Номер версии виден на сервере: `curl -s localhost:8080/health` и `./start.sh --check`.
+- README: как скачать с GitHub и распаковать tar.gz или ZIP на Ubuntu без `unzip`.
+
+Код бота и зависимости — те же, что в 1.3.1.
+
+## Где взять
+
+<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.2.tar.gz> → `x5_bot-1.3.2.tar.gz`
+(или `rooms-bot-1.3.2.tar.gz` из вложений релиза — то же без тестов и внутренних документов).
 
 ## Установка
 
 ```bash
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
-tar xzf ~/rooms-bot-1.3.1.tar.gz --strip-components=1 -C /opt/rooms-bot
-cd /opt/rooms-bot && ./setup.sh && ./start.sh
+tar xzf ~/x5_bot-1.3.2.tar.gz --strip-components=1 -C /opt/rooms-bot
+cd /opt/rooms-bot && ls vendor | head -3 && ./setup.sh && ./start.sh
 sudo ./deploy/install-service.sh     # чтобы работал как служба
 ```
 
@@ -20,13 +35,16 @@ sudo ./deploy/install-service.sh     # чтобы работал как служ
 В `.env`: `AI_ENABLED=true`, `AI_URL` (с `/v1`), `AI_MODEL`, `AI_API_KEY` — либо строки `LLM_URL`,
 `LLM_MODEL`, `LLM_API_KEY` из `.env` innolib, бот понимает их как есть. Проверить: `./start.sh --check-ai`.
 
-## Обновление с 1.3.0
+## Обновление с 1.3.0 или 1.3.1
 
 ```bash
-cd /opt/rooms-bot && ./update.sh ~/rooms-bot-1.3.1.tar.gz --service rooms-bot
+cd /opt/rooms-bot && ./update.sh ~/x5_bot-1.3.2.tar.gz --service rooms-bot
 ```
 
-## Что исправлено и добавлено
+`.env`, журнал и содержание сохраняются. Проверить, что встала новая версия:
+`curl -s localhost:8080/health` → `"version": "1.3.2"`.
+
+## Изменения 1.3.1 (входят в этот релиз)
 
 Проверка на настоящем CPython 3.10 с «голым» окружением выявила и закрыла:
 
