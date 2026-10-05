@@ -1,9 +1,22 @@
-# Релиз v1.3.2
+# Релиз v1.3.3
 
 Архив самодостаточный: зависимости внутри (`vendor/`). На сервере не нужны интернет, pip, venv,
 Docker и зеркало PyPI. Нужен **Ubuntu с Python 3.10 на x86_64** (Ubuntu 22.04).
 
-## Что нового в 1.3.2
+## Что нового в 1.3.3
+
+**ИИ настроен под X5 AI-Run** — по документации платформы:
+
+- бот подключается как *клиентская система*: `AI_URL=https://direct-llm.airun.x5.ru/v1`
+  (DEV — `https://direct-llm.k8s.airun-dev-13.salt.x5.ru/v1`), а не через `api-copilot.x5.ru` для людей;
+- серверу нужен сетевой доступ: группа `airun-app-prod-4` в «Сетевые доступы» Salt X5, по согласованию с ИБ;
+- модель — `x5-airun-small` (быстрый режим без рассуждений), варианты `-thinking` не рекомендуются;
+- `./start.sh --check-ai` при недоступности модели подсказывает про сетевой доступ.
+
+Запросы к модели проверены на соответствие формату AI-Run (OpenAI API, `Authorization: Bearer`);
+код клиента менять не потребовалось. Живой вызов шлюза — только с сервера в контуре X5.
+
+## Что вошло из 1.3.2
 
 - **`vendor/` теперь в репозитории.** Архивы, которые отдаёт GitHub (по тегу и «Code → Download ZIP»),
   собираются из git — в 1.3.1 `vendor/` в них был пустым, и на сервере бот не запускался.
@@ -15,14 +28,14 @@ Docker и зеркало PyPI. Нужен **Ubuntu с Python 3.10 на x86_64** 
 
 ## Где взять
 
-<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.2.tar.gz> → `x5_bot-1.3.2.tar.gz`
-(или `rooms-bot-1.3.2.tar.gz` из вложений релиза — то же без тестов и внутренних документов).
+<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.3.tar.gz> → `x5_bot-1.3.3.tar.gz`
+(или `rooms-bot-1.3.3.tar.gz` из вложений релиза — то же без тестов и внутренних документов).
 
 ## Установка
 
 ```bash
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
-tar xzf ~/x5_bot-1.3.2.tar.gz --strip-components=1 -C /opt/rooms-bot
+tar xzf ~/x5_bot-1.3.3.tar.gz --strip-components=1 -C /opt/rooms-bot
 cd /opt/rooms-bot && ls vendor | head -3 && ./setup.sh && ./start.sh
 sudo ./deploy/install-service.sh     # чтобы работал как служба
 ```
@@ -32,17 +45,17 @@ sudo ./deploy/install-service.sh     # чтобы работал как служ
 
 ## Включить ИИ
 
-В `.env`: `AI_ENABLED=true`, `AI_URL` (с `/v1`), `AI_MODEL`, `AI_API_KEY` — либо строки `LLM_URL`,
+В `.env`: `AI_ENABLED=true`, `AI_URL=https://direct-llm.airun.x5.ru/v1`, `AI_MODEL=x5-airun-small`, `AI_API_KEY` — либо строки `LLM_URL`,
 `LLM_MODEL`, `LLM_API_KEY` из `.env` innolib, бот понимает их как есть. Проверить: `./start.sh --check-ai`.
 
-## Обновление с 1.3.0 или 1.3.1
+## Обновление с 1.3.0–1.3.2
 
 ```bash
-cd /opt/rooms-bot && ./update.sh ~/x5_bot-1.3.2.tar.gz --service rooms-bot
+cd /opt/rooms-bot && ./update.sh ~/x5_bot-1.3.3.tar.gz --service rooms-bot
 ```
 
 `.env`, журнал и содержание сохраняются. Проверить, что встала новая версия:
-`curl -s localhost:8080/health` → `"version": "1.3.2"`.
+`curl -s localhost:8080/health` → `"version": "1.3.3"`.
 
 ## Изменения 1.3.1 (входят в этот релиз)
 
