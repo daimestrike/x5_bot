@@ -12,4 +12,5 @@ dist/
 report.xml
 journal.csv
 content/review/.validate/
-vendor/
+# vendor/ хранится в git намеренно: архив с GitHub должен запускаться на сервере без сети
+vendor/**/__pycache__/

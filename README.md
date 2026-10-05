@@ -17,17 +17,36 @@
 **Нужно:** Ubuntu, **Python 3.10, x86_64** (Ubuntu 22.04 — ровно это). Больше ничего.
 Проверить: `python3 -V` → `Python 3.10.x`, `uname -m` → `x86_64`.
 
+**Где взять архив.** На машине с интернетом скачайте с GitHub версию по тегу — в ней уже есть
+`vendor/` со всеми зависимостями:
+
+<https://github.com/daimestrike/x5_bot/archive/refs/tags/v1.3.1.tar.gz>  → файл `x5_bot-1.3.1.tar.gz`
+
 ```bash
-# на машине с интернетом: скачать rooms-bot-1.3.1.tar.gz (+ .sha256) из релиза и скопировать
-scp rooms-bot-1.3.1.tar.gz* ПОЛЬЗОВАТЕЛЬ@СЕРВЕР:~/
+scp x5_bot-1.3.1.tar.gz ПОЛЬЗОВАТЕЛЬ@СЕРВЕР:~/
 
 # на сервере
 sudo mkdir -p /opt/rooms-bot && sudo chown "$USER" /opt/rooms-bot
-tar xzf ~/rooms-bot-1.3.1.tar.gz --strip-components=1 -C /opt/rooms-bot
+tar xzf ~/x5_bot-1.3.1.tar.gz --strip-components=1 -C /opt/rooms-bot
 cd /opt/rooms-bot
-./setup.sh          # создаёт .env и проверяет конфигурацию; ничего не скачивает
-./start.sh          # бот запущен, Ctrl+C — остановить
+ls vendor | head -3   # должно быть не пусто: annotated_doc, annotated_types, anyio…
+./setup.sh            # создаёт .env и проверяет конфигурацию; ничего не скачивает
+./start.sh            # бот запущен, Ctrl+C — остановить
 ```
+
+<details>
+<summary>Скачали ZIP («Code → Download ZIP»), а не tar.gz</summary>
+
+В ZIP то же самое, `vendor/` внутри. На Ubuntu может не быть `unzip` — распакуйте средствами Python:
+
+```bash
+cd /opt/rooms-bot
+python3 -m zipfile -e ~/x5_bot-main.zip . && cp -r x5_bot-main/. . && rm -rf x5_bot-main
+sh setup.sh && sh start.sh        # через sh: распаковка Python не сохраняет права на запуск
+```
+</details>
+
+Архив `rooms-bot-1.3.1.tar.gz` из релиза — то же самое, только без тестовых и внутренних документов.
 
 `setup.sh` должен закончиться строками `Конфигурация корректна: mode=demo, cards=35` и `Готово`.
 
@@ -135,7 +154,8 @@ scp rooms-bot-НОВАЯ.tar.gz* ПОЛЬЗОВАТЕЛЬ@СЕРВЕР:~/
 cd /opt/rooms-bot && ./update.sh ~/rooms-bot-НОВАЯ.tar.gz --service rooms-bot
 ```
 
-`update.sh` сверяет контрольную сумму → делает резервную копию → меняет код и `vendor/` → проверяет
+Подойдёт любой архив новой версии: tar.gz или zip с GitHub либо `rooms-bot-*.tar.gz` из релиза.
+`update.sh` сверяет контрольную сумму (если рядом лежит `.sha256`) → делает резервную копию → меняет код и `vendor/` → проверяет
 конфигурацию → перезапускает службу. **Не трогает** `.env`, журнал `data/` и содержание `content/`
 (карточки, загруженные документы, очередь проверки). Если новая версия не прошла проверку —
 сам возвращает прежний код и зависимости. Без службы — уберите `--service rooms-bot` и запустите
@@ -157,6 +177,8 @@ cp -r backups/pre-update-ПОСЛЕДНЯЯ/code/. . && sudo systemctl restart r
 | `Нужен 64-разрядный Python 3.10 или новее` | на сервере старый Python — нужен 3.10 |
 | `vendor/ собран под Python 3.10 linux x86_64, а запущен …` | другой Python или ARM. На машине с интернетом: `python scripts/vendor.py --python-version 3.X --arch x86_64\|aarch64`, затем `python scripts/package.py --name rooms-bot-1.3.1` |
 | `Нет .env` | выполните `./setup.sh` |
+| `Зависимости не найдены: каталога vendor/ нет` | скачан архив без `vendor/` (версия до 1.3.1 или ветка без него) — возьмите tar.gz по тегу v1.3.1 и новее |
+| `Permission denied` на `./setup.sh` | распаковали ZIP средствами Python — запускайте `sh setup.sh`, `sh start.sh` |
 | `Address already in use` | порт занят: `PORT=8081` в `.env` или остановите прежний процесс |
 | `Конфигурация … ошибка` в `update.sh` | обновление отменено само, прежняя версия работает; пришлите текст ошибки |
 | служба не стартует | `sudo journalctl -u rooms-bot -n 50 --no-pager` |
