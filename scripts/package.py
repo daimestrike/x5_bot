@@ -30,6 +30,7 @@ ALLOWED_FILES = {
     ".gitlab-ci.yml",
     "requirements.txt",
     "requirements-dev.txt",
+    "requirements.lock",
     "Makefile",
     "pytest.ini",
     "ruff.toml",
@@ -57,6 +58,8 @@ def included():
         relative = path.relative_to(ROOT)
         if set(relative.parts) & EXCLUDED_PARTS or path.suffix in EXCLUDED_SUFFIXES:
             continue
+        if any(part.startswith("._") or part in (".DS_Store", "Thumbs.db") for part in relative.parts):
+            continue  # служебные файлы macOS/Windows
         # .env.example нужен, а заполненный .env и его варианты — нет
         if path.name in EXCLUDED_NAMES or (path.name.startswith(".env") and path.name != ".env.example"):
             continue

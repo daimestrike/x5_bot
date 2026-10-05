@@ -11,6 +11,7 @@
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 
@@ -26,11 +27,20 @@ class LLMError(Exception):
 
 
 def strip_think(text):
-    """Убирает блоки рассуждений <think>…</think> у reasoning-моделей."""
+    """Убирает блоки рассуждений <think>…</think> у reasoning-моделей (Qwen3 в шлюзе X5 и др.).
+
+    Если лимит токенов кончился посреди рассуждения, закрывающего тега нет — такой хвост тоже
+    вырезается целиком: недодуманные рассуждения не должны попасть Аватару вместо ответа.
+    """
     text = _THINK_RE.sub("", text or "")
     if "</think>" in text:  # шаблон открыл <think> сам, в ответе только закрывающий тег
         text = text.split("</think>", 1)[1]
+    if "<think>" in text:  # рассуждение оборвано лимитом — ответа после него нет
+        text = text.split("<think>", 1)[0]
     return text.strip()
+
+
+THINKING_OFF = {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 class LLM:
@@ -40,6 +50,7 @@ class LLM:
         self.url = (settings.ai_url or "").rstrip("/")
         self.model = settings.ai_model or ""
         self.key = settings.ai_api_key or ""
+        self.auth_header = getattr(settings, "ai_auth_header", "") or "Authorization"
         self.timeout = settings.ai_timeout
         self.temperature = settings.ai_temperature
         self.max_tokens = settings.ai_max_tokens
@@ -51,6 +62,11 @@ class LLM:
             raise ValueError("AI_EXTRA_JSON: некорректный JSON") from e
         if not isinstance(self.extra, dict):
             raise ValueError("AI_EXTRA_JSON: ожидается объект JSON")
+        # Qwen3 в шлюзе X5 по умолчанию «рассуждает»: долго и съедает лимит токенов. Как в innolib,
+        # рассуждения отключаются; если сервер параметр не принимает — повторяем без него и запоминаем.
+        self.thinking_off = bool(getattr(settings, "ai_disable_thinking", True)) and \
+            "chat_template_kwargs" not in self.extra
+        self.last = {}
 
         context = ssl.create_default_context(cafile=settings.ai_ca_file or None)
         if not settings.ai_verify_tls:
@@ -76,7 +92,11 @@ class LLM:
         request.add_header("Content-Type", "application/json")
         request.add_header("Accept", "application/json")
         if self.key:
-            request.add_header("Authorization", "Bearer " + self.key)
+            # Стандарт OpenAI — «Authorization: Bearer ключ»; свой заголовок (api-key, X-API-Key) — ключ как есть
+            if self.auth_header.lower() == "authorization":
+                request.add_header("Authorization", "Bearer " + self.key)
+            else:
+                request.add_header(self.auth_header, self.key)
         try:
             return self.opener.open(request, timeout=timeout or self.timeout)
         except urllib.error.HTTPError as e:
@@ -98,20 +118,46 @@ class LLM:
         data = self._json(self.url, "/models", timeout=min(self.timeout, 15))
         return [m.get("id") for m in data.get("data", []) if isinstance(m, dict)]
 
-    def complete(self, messages, temperature=None):
+    def _body(self, messages, temperature):
         body = {
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature if temperature is None else temperature,
             "max_tokens": self.max_tokens,
         }
+        if self.thinking_off:
+            body.update(THINKING_OFF)
         body.update(self.extra)
-        data = self._json(self.url, "/chat/completions", body)
+        return body
+
+    def complete(self, messages, temperature=None):
+        started = time.monotonic()
         try:
-            text = strip_think(data["choices"][0]["message"]["content"] or "")
-        except (KeyError, IndexError, TypeError):
+            data = self._json(self.url, "/chat/completions", self._body(messages, temperature))
+        except LLMError as error:
+            if not (self.thinking_off and error.status in (400, 422)):
+                raise
+            self.thinking_off = False  # сервер не знает chat_template_kwargs — больше не отправляем
+            data = self._json(self.url, "/chat/completions", self._body(messages, temperature))
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+            raw = message.get("content") or ""
+        except (KeyError, IndexError, TypeError, AttributeError):
             raise LLMError("ai_bad_response", "В ответе LLM нет choices[0].message.content") from None
+        text = strip_think(raw)
+        thinking = "<think>" in raw or "</think>" in raw or bool(message.get("reasoning_content") or message.get("reasoning"))
+        self.last = {
+            "seconds": round(time.monotonic() - started, 1),
+            "thinking": thinking,
+            "finish_reason": choice.get("finish_reason"),
+            "thinking_off_sent": self.thinking_off,
+        }
         if not text:
+            if thinking or choice.get("finish_reason") == "length":
+                raise LLMError("ai_truncated", "Модель потратила весь лимит токенов на рассуждения и не дала ответа. "
+                               'Отключите рассуждения: AI_DISABLE_THINKING=true или AI_EXTRA_JSON='
+                               '{"chat_template_kwargs":{"enable_thinking":false}}; либо увеличьте AI_MAX_TOKENS')
             raise LLMError("ai_bad_response", "LLM вернул пустой ответ")
         return text[:MAX_ANSWER_CHARS]
 
@@ -140,4 +186,5 @@ class LLM:
             temperature=0,
         )
         result["answer"] = answer[:100]
+        result.update(self.last)
         return result

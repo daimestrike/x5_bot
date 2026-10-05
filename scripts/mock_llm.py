@@ -39,6 +39,10 @@ def answer_from_context(messages):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Режимы эмуляции шлюза X5 (задаются флагами командной строки)
+    qwen3 = False      # модель рассуждает (<think>), пока ей не передали enable_thinking=false
+    strict = False     # шлюз отвергает незнакомые параметры (chat_template_kwargs) ошибкой 400
+    api_key = ""       # требовать ключ: Authorization: Bearer <ключ>
 
     def _send(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -60,14 +64,27 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8"))
         except ValueError:
             return self._send({"error": "bad json"}, 400)
+        if self.api_key and self.headers.get("Authorization") != "Bearer " + self.api_key:
+            return self._send({"error": {"message": "Invalid API key"}}, 401)
+        if self.strict and "chat_template_kwargs" in body:
+            return self._send({"error": {"message": "Unrecognized request argument: chat_template_kwargs"}}, 400)
         path = self.path.rstrip("/")
         if path.endswith("/chat/completions"):
             text = answer_from_context(body.get("messages") or [])
+            finish = "stop"
+            thinking_off = (body.get("chat_template_kwargs") or {}).get("enable_thinking") is False
+            if self.qwen3 and not thinking_off:
+                # Как Qwen3: сначала длинные рассуждения; при малом max_tokens ответ не успевает начаться
+                reasoning = "<think>Пользователь спрашивает про инвентаризацию. " + "Рассуждаю дальше. " * 300
+                if (body.get("max_tokens") or 10_000) < 1500:
+                    text, finish = reasoning, "length"
+                else:
+                    text = reasoning + "</think>" + text
             self._send({
                 "id": "mock-" + str(int(time.time())),
                 "object": "chat.completion",
                 "model": body.get("model", "mock"),
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             })
         elif path.endswith("/embeddings"):
@@ -96,6 +113,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8011)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--qwen3", action="store_true", help="эмулировать рассуждения Qwen3 (как в шлюзе X5)")
+    parser.add_argument("--strict", action="store_true", help="отвергать незнакомые параметры запроса (HTTP 400)")
+    parser.add_argument("--api-key", default="", help="требовать этот ключ в Authorization: Bearer")
     args = parser.parse_args()
     print(f"Заглушка модели: http://{args.host}:{args.port}/v1 (Ctrl+C — выход)")
+    Handler.qwen3, Handler.strict, Handler.api_key = args.qwen3, args.strict, args.api_key
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

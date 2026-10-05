@@ -5,6 +5,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def env(name, *aliases, default=""):
+    """Значение переменной; aliases — имена из innolib (LLM_URL и т.п.), чтобы .env можно было перенести как есть."""
+    for key in (name, *aliases):
+        value = os.getenv(key)
+        if value is not None and value.strip() != "":
+            return value.strip()
+    return default
+
+
+def flag(name, *aliases, default):
+    """true/false, а для имён innolib ещё 1/0."""
+    for key in (name, *aliases):
+        value = os.getenv(key)
+        if value is None or value.strip() == "":
+            continue
+        value = value.strip().lower()
+        if value in ("true", "1"):
+            return True
+        if value in ("false", "0"):
+            return False
+        raise ValueError(key + " must be true or false")
+    return default
+
+
 def boolean(name, default):
     value = os.getenv(name)
     if value is None:
@@ -45,6 +69,8 @@ class Settings:
     ai_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    ai_auth_header: str = "Authorization"
+    ai_disable_thinking: bool = True
     ai_timeout: float = 30.0
     ai_temperature: float = 0.1
     ai_max_tokens: int = 500
@@ -83,18 +109,21 @@ class Settings:
             rooms_token_url=os.getenv("ROOMS_TOKEN_URL", ""),
             rooms_send_url=os.getenv("ROOMS_SEND_URL", ""),
             ai_enabled=boolean("AI_ENABLED", False),
-            ai_url=os.getenv("AI_URL", "").strip(),
-            ai_model=os.getenv("AI_MODEL", "").strip(),
-            ai_api_key=os.getenv("AI_API_KEY", "").strip(),
-            ai_timeout=float(os.getenv("AI_TIMEOUT", "30")),
+            ai_url=env("AI_URL", "LLM_URL"),
+            # как в innolib: для чата можно указать отдельную модель LLM_CHAT_MODEL
+            ai_model=env("AI_MODEL", "LLM_CHAT_MODEL", "LLM_MODEL"),
+            ai_api_key=env("AI_API_KEY", "LLM_API_KEY"),
+            ai_auth_header=env("AI_AUTH_HEADER", default="Authorization"),
+            ai_disable_thinking=flag("AI_DISABLE_THINKING", default=True),
+            ai_timeout=float(env("AI_TIMEOUT", "LLM_TIMEOUT", default="30")),
             ai_temperature=float(os.getenv("AI_TEMPERATURE", "0.1")),
             ai_max_tokens=int(os.getenv("AI_MAX_TOKENS", "500")),
-            ai_embed_model=os.getenv("AI_EMBED_MODEL", "").strip(),
-            ai_embed_url=os.getenv("AI_EMBED_URL", "").strip(),
-            ai_ca_file=os.getenv("AI_CA_FILE", "").strip(),
-            ai_verify_tls=boolean("AI_VERIFY_TLS", True),
-            ai_use_system_proxy=boolean("AI_USE_SYSTEM_PROXY", False),
-            ai_extra_json=os.getenv("AI_EXTRA_JSON", ""),
+            ai_embed_model=env("AI_EMBED_MODEL", "EMBED_MODEL"),
+            ai_embed_url=env("AI_EMBED_URL", "EMBED_URL"),
+            ai_ca_file=env("AI_CA_FILE", "LLM_CA_BUNDLE"),
+            ai_verify_tls=flag("AI_VERIFY_TLS", "LLM_VERIFY_TLS", default=True),
+            ai_use_system_proxy=flag("AI_USE_SYSTEM_PROXY", "LLM_USE_SYSTEM_PROXY", default=False),
+            ai_extra_json=env("AI_EXTRA_JSON", "LLM_EXTRA_JSON"),
             ai_min_words=int(os.getenv("AI_MIN_WORDS", "2")),
         )
         s.validate()

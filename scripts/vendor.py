@@ -13,9 +13,16 @@
 
 Проверить, что получилось, можно прямо здесь:
     python scripts/vendor.py --verify
+
+Точные версии фиксируются в requirements.lock: повторная сборка даёт тот же набор, что
+проверялся тестами. Обновить версии осознанно — флаг --refresh. Рядом с пакетами пишется
+vendor/VENDOR.json: под какой Python, ОС и архитектуру собран набор. По этой метке бот
+решает, подключать ли vendor/ (app/_bootstrap.py).
 """
 
 import argparse
+import datetime as dt
+import json
 import re
 import shutil
 import struct
@@ -26,12 +33,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor"
+LOCK = ROOT / "requirements.lock"
+MARKER = VENDOR / "VENDOR.json"
 PLATFORMS = {
     "x86_64": ["manylinux2014_x86_64", "manylinux_2_17_x86_64", "manylinux_2_28_x86_64"],
     "aarch64": ["manylinux2014_aarch64", "manylinux_2_17_aarch64", "manylinux_2_28_aarch64"],
 }
 # Служебное из wheel-пакетов: на сервере не нужно и только занимает место
 JUNK_DIRS = ("bin", "__pycache__")
+
+
+def installed_versions():
+    out = {}
+    for info in VENDOR.glob("*.dist-info"):
+        name, _, version = info.name[: -len(".dist-info")].partition("-")
+        out[name.lower().replace("_", "-")] = version
+    return dict(sorted(out.items()))
+
+
+def write_lock(versions):
+    lines = ["# Точные версии поставки vendor/. Собрано scripts/vendor.py; не правьте вручную.",
+             "# Обновить: python scripts/vendor.py --refresh"]
+    lines += [f"{name}=={version}" for name, version in versions.items()]
+    LOCK.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_marker(python_version, arch, versions):
+    MARKER.write_text(json.dumps({
+        "python": python_version,
+        "system": "linux",
+        "arch": arch,
+        "built": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "packages": versions,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def build(python_version, arch, requirements):
@@ -47,7 +81,7 @@ def build(python_version, arch, requirements):
     ]
     for platform in PLATFORMS[arch]:
         command += ["--platform", platform]
-    command += ["-r", str(ROOT / requirements)]
+    command += ["-r", str(requirements)]
     subprocess.run(command, cwd=ROOT, check=True)
 
 
@@ -119,6 +153,8 @@ def main(argv=None):
     parser.add_argument("--dev", action="store_true", help="добавить pytest, Ruff и openpyxl")
     parser.add_argument("--clean", action="store_true", help="очистить vendor/ перед сборкой")
     parser.add_argument("--verify", action="store_true", help="только проверить уже собранный vendor/")
+    parser.add_argument("--refresh", action="store_true",
+                        help="взять свежие версии по requirements.txt вместо requirements.lock")
     args = parser.parse_args(argv)
 
     if args.verify:
@@ -128,8 +164,20 @@ def main(argv=None):
         shutil.rmtree(VENDOR)
     print(f"Скачиваю зависимости: Linux {args.arch}, Python {args.python_version}")
     print(f"  текущая платформа {sysconfig.get_platform()} — для сборки это неважно")
-    build(args.python_version, args.arch, "requirements-dev.txt" if args.dev else "requirements.txt")
+    if args.dev:
+        source = ROOT / "requirements-dev.txt"
+    elif LOCK.exists() and not args.refresh:
+        source = LOCK
+        print("  версии из requirements.lock — тот же набор, что проверялся тестами")
+    else:
+        source = ROOT / "requirements.txt"
+    build(args.python_version, args.arch, source)
     tidy()
+    versions = installed_versions()
+    write_marker(args.python_version, args.arch, versions)
+    if source != LOCK and not args.dev:
+        write_lock(versions)
+        print(f"  точные версии записаны в {LOCK.name}")
     verify()
     print("\nГотово. Теперь соберите архив: python scripts/package.py --name rooms-bot-<версия>")
     return 0

@@ -71,7 +71,8 @@ def create_app(settings=None):
     catalog = Catalog(settings.content_dir, production=settings.mode == "production")
     sources = SourceStore(settings.content_dir)
     llm = LLM(settings)
-    assistant = Assistant(settings, catalog, sources, llm, LOG.info,
+    # warning, а не info: сбои модели должны быть видны в journalctl без настройки логов
+    assistant = Assistant(settings, catalog, sources, llm, LOG.warning,
                           cache_path=Path(settings.db_path).with_name("embeddings.sqlite3"))
     engine = Engine(
         catalog,

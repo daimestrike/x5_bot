@@ -1,4 +1,6 @@
-# Systemd-юнит для Ubuntu. Скопировать, подставить путь и пользователя:
+# Справочный шаблон. Проще выполнить: sudo ./deploy/install-service.sh
+# Он подставит каталог, пользователя и путь к python3 и проверит конфигурацию.
+# Вручную: заменить /opt/rooms-bot и botuser, затем
 #   sudo cp deploy/rooms-bot.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now rooms-bot
 [Unit]
@@ -8,21 +10,18 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=rooms
-Group=rooms
+User=botuser
+Group=botuser
 WorkingDirectory=/opt/rooms-bot
-ExecStart=/opt/rooms-bot/.venv/bin/python /opt/rooms-bot/run.py
+# Системный python3: зависимости берутся из /opt/rooms-bot/vendor, .venv не нужен
+ExecStart=/usr/bin/python3 /opt/rooms-bot/run.py
 Restart=on-failure
 RestartSec=5
-# Журнал и секреты доступны только службе
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/rooms-bot/data /opt/rooms-bot/content /opt/rooms-bot/backups
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

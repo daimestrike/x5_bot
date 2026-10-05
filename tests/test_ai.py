@@ -229,3 +229,102 @@ def test_journal_keeps_no_question_text(make_engine, event):
     with engine.connect() as db:
         dump = "\n".join(db.iterdump())
     assert "секретная фраза" not in dump
+
+
+@pytest.mark.parametrize("header,expected_name,expected_value", [
+    ("Authorization", "Authorization", "Bearer k-123"),
+    ("api-key", "Api-key", "k-123"),
+])
+def test_llm_auth_header(ai_settings, monkeypatch, header, expected_name, expected_value):
+    llm = LLM(replace(ai_settings, ai_api_key="k-123", ai_auth_header=header))
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_open(request, timeout=None):
+        seen.update(request.header_items())
+        return Response()
+
+    monkeypatch.setattr(llm.opener, "open", fake_open)
+    llm.complete([{"role": "user", "content": "x"}])
+    assert seen.get(expected_name) == expected_value
+
+
+# ---------------------------------------------------------------- модели шлюза X5 (Qwen3, как в innolib)
+def test_truncated_reasoning_never_reaches_user():
+    assert strip_think("<think>думаю, и лимит кончился") == ""
+    assert strip_think("<think>думаю</think>Ответ [A-07]") == "Ответ [A-07]"
+
+
+def fake_gateway(monkeypatch, llm, replies):
+    """replies: список (status, json); запоминает тела запросов."""
+    sent = []
+
+    def fake_json(base, path, body=None, timeout=None):
+        sent.append(body)
+        status, data = replies[len(sent) - 1]
+        if status != 200:
+            raise LLMError("ai_http", "HTTP %d" % status, status)
+        return data
+
+    monkeypatch.setattr(llm, "_json", fake_json)
+    return sent
+
+
+def answer(text, finish="stop", **message):
+    return {"choices": [{"message": {"content": text, **message}, "finish_reason": finish}]}
+
+
+def test_thinking_disabled_by_default(ai_settings, monkeypatch):
+    llm = LLM(ai_settings)
+    sent = fake_gateway(monkeypatch, llm, [(200, answer("Ок [A-07]"))])
+    assert llm.complete([{"role": "user", "content": "x"}]) == "Ок [A-07]"
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_strict_gateway_retried_without_thinking_flag(ai_settings, monkeypatch):
+    llm = LLM(ai_settings)
+    sent = fake_gateway(monkeypatch, llm, [(400, None), (200, answer("Ок")), (200, answer("Ещё"))])
+    assert llm.complete([{"role": "user", "content": "x"}]) == "Ок"
+    assert "chat_template_kwargs" not in sent[1]
+    llm.complete([{"role": "user", "content": "x"}])
+    assert "chat_template_kwargs" not in sent[2]  # запомнил, больше не отправляет
+
+
+def test_reasoning_eats_token_limit(ai_settings, monkeypatch):
+    llm = LLM(replace(ai_settings, ai_disable_thinking=False))
+    fake_gateway(monkeypatch, llm, [(200, answer("<think>долго думаю", finish="length"))])
+    with pytest.raises(LLMError) as error:
+        llm.complete([{"role": "user", "content": "x"}])
+    assert error.value.code == "ai_truncated"
+
+
+def test_user_extra_json_wins(ai_settings, monkeypatch):
+    llm = LLM(replace(ai_settings, ai_extra_json='{"chat_template_kwargs":{"enable_thinking":true},"top_p":0.8}'))
+    sent = fake_gateway(monkeypatch, llm, [(200, answer("Ок"))])
+    llm.complete([{"role": "user", "content": "x"}])
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": True} and sent[0]["top_p"] == 0.8
+
+
+def test_innolib_env_names_are_accepted(monkeypatch):
+    from app.config import Settings
+
+    for key, value in {
+        "BOT_STATE_SECRET": "s" * 40, "BOT_API_TOKEN": "a" * 40, "METRICS_TOKEN": "m" * 40,
+        "AI_ENABLED": "true", "LLM_URL": "https://gw.x5.invalid/v1", "LLM_MODEL": "qwen3-light",
+        "LLM_CHAT_MODEL": "qwen3-chat", "LLM_API_KEY": "k", "LLM_VERIFY_TLS": "0", "LLM_TIMEOUT": "45",
+        "LLM_EXTRA_JSON": '{"top_p":0.9}', "EMBED_MODEL": "bge-m3",
+    }.items():
+        monkeypatch.setenv(key, value)
+    s = Settings.from_env()
+    assert (s.ai_url, s.ai_model, s.ai_api_key) == ("https://gw.x5.invalid/v1", "qwen3-chat", "k")
+    assert s.ai_verify_tls is False and s.ai_timeout == 45 and s.ai_embed_model == "bge-m3"
+    assert s.ai_extra_json == '{"top_p":0.9}'

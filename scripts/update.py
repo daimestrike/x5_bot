@@ -7,8 +7,9 @@
 заменяет код, доустанавливает зависимости (из wheels/ или внутреннего PyPI), проверяет
 конфигурацию и запускает службу обратно. При ошибке откатывает код из резервной копии.
 
-vendor/ (зависимости из поставки) обновляется вместе с кодом, но в резервную копию не попадает:
-он восстанавливается из архива и занимает десятки мегабайт.
+vendor/ (зависимости из поставки) обновляется вместе с кодом. Прежний vendor/ не копируется,
+а переносится в резервную копию (мгновенно) и возвращается при откате; хранится только в последней
+резервной копии — он занимает десятки мегабайт.
 
 Чего НЕ трогает — это данные установки, а не код:
     .env                      секреты и адреса
@@ -117,27 +118,45 @@ def restore_code(backup_dir):
     for name in CODE_DIRS:
         if (code / name).exists():
             shutil.rmtree(ROOT / name, ignore_errors=True)
-            shutil.copytree(code / name, ROOT / name)
-        elif name in BACKUP_SKIP:
-            say(f"  {name}/ в резервной копии нет — остаётся версия из нового архива")
+            if name in BACKUP_SKIP:
+                shutil.move(str(code / name), str(ROOT / name))  # перенесён при замене — возвращаем так же
+            else:
+                shutil.copytree(code / name, ROOT / name)
     for name in CODE_FILES:
         if (code / name).exists():
             shutil.copy2(code / name, ROOT / name)
 
 
-def replace_code(new_root):
+def drop_junk(root):
+    for path in sorted(root.rglob("*"), reverse=True):
+        if is_junk(path.relative_to(root)):
+            shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink(missing_ok=True)
+
+
+def replace_code(new_root, backup_dir):
     for name in CODE_DIRS:
         source = new_root / name
         if not source.exists():
             continue
-        shutil.rmtree(ROOT / name, ignore_errors=True)
-        shutil.copytree(source, ROOT / name)
+        current = ROOT / name
+        if name in BACKUP_SKIP and current.exists():
+            # vendor/ большой: не копируем, а переносим в резервную копию — мгновенно и с возможностью отката
+            (backup_dir / "code").mkdir(parents=True, exist_ok=True)
+            shutil.move(str(current), str(backup_dir / "code" / name))
+        else:
+            shutil.rmtree(current, ignore_errors=True)
+        shutil.copytree(source, current)
     for name in CODE_FILES:
         source = new_root / name
         if source.exists():
             shutil.copy2(source, ROOT / name)
             if source.suffix == ".sh":
                 os.chmod(ROOT / name, 0o755)
+
+
+def is_junk(path):
+    """Служебные файлы macOS/Windows: появляются, если архив перепаковали на Mac или в проводнике."""
+    return any(part.startswith("._") or part in (".DS_Store", "Thumbs.db", "__MACOSX") for part in path.parts)
 
 
 def merge_content(new_root):
@@ -147,9 +166,9 @@ def merge_content(new_root):
         return
     added, differs = [], []
     for path in sorted(source.rglob("*")):
-        if not path.is_file():
-            continue
         relative = path.relative_to(source)
+        if not path.is_file() or is_junk(relative):
+            continue
         target = ROOT / "content" / relative
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -205,21 +224,20 @@ def main(argv=None):
 
     with tempfile.TemporaryDirectory(dir=str(ROOT)) as temporary:
         new_root = unpack(archive, Path(temporary))
+        drop_junk(new_root)
         say("Заменяю код")
         try:
-            replace_code(new_root)
+            replace_code(new_root, backup_dir)
             if not args.skip_deps:
                 install_dependencies(sys.executable, args.index_url, args.offline)
-            python = ROOT / ".venv/bin/python"
-            if python.exists():
-                check = subprocess.run([str(python), str(ROOT / "run.py"), "--check"],
-                                       cwd=ROOT, capture_output=True, text=True)
-                if check.returncode != 0:
-                    raise RuntimeError((check.stderr or check.stdout).strip())
-                say("  " + check.stdout.strip())
-            else:
-                # установка не на .venv (например, Docker) — проверить нечем, но код уже заменён
-                say("  .venv не найден: проверку конфигурации пропускаю")
+            # run.py сам подключает vendor/ или переходит в .venv — проверяем тем же путём, что и запуск.
+            venv_python = ROOT / ".venv/bin/python"
+            python = venv_python if venv_python.exists() and not (ROOT / "vendor").is_dir() else Path(sys.executable)
+            check = subprocess.run([str(python), str(ROOT / "run.py"), "--check"],
+                                   cwd=ROOT, capture_output=True, text=True)
+            if check.returncode != 0:
+                raise RuntimeError((check.stderr or check.stdout).strip())
+            say("  " + check.stdout.strip())
             # Содержание доливаем только после успешной проверки, чтобы откат был полным.
             merge_content(new_root)
         except (subprocess.CalledProcessError, RuntimeError, OSError) as error:
@@ -236,6 +254,10 @@ def main(argv=None):
         say("Служба не задана — запустите вручную: ./start.sh (или systemctl start <служба>)")
 
     copies = sorted((ROOT / "backups").glob("pre-update-*"))
+    # vendor/ держим только в последней резервной копии: для отката на шаг назад этого достаточно
+    for old in copies[:-1]:
+        for name in BACKUP_SKIP:
+            shutil.rmtree(old / "code" / name, ignore_errors=True)
     for old in copies[:-args.keep_backups] if args.keep_backups > 0 else []:
         shutil.rmtree(old, ignore_errors=True)
 

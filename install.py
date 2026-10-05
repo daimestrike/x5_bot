@@ -60,9 +60,19 @@ def main(argv=None):
 
     if VENDOR.is_dir() and not args.dev:
         # Зависимости уже лежат в поставке: ни сеть, ни pip, ни venv не нужны.
+        sys.path.insert(0, str(ROOT))
+        from app import _bootstrap
+
+        if not _bootstrap.status["active"]:
+            raise SystemExit(
+                "vendor/ не подходит этому серверу: " + _bootstrap.status["reason"] + ".\n"
+                "Пересоберите поставку на машине с интернетом: "
+                "python scripts/vendor.py --python-version X.Y --arch x86_64|aarch64"
+            )
         print("Зависимости найдены в vendor/ — устанавливать нечего.")
         prepare_env(args.secure, sys.executable)
-        subprocess.run([sys.executable, str(ROOT / "scripts/validate_content.py")], cwd=ROOT, check=True)
+        # Проверка запускается тем же Python; vendor/ подключит сам пакет app.
+        subprocess.run([sys.executable, str(ROOT / "run.py"), "--check"], cwd=ROOT, check=True)
         print("\nГотово. Запуск: ./start.sh")
         return
 

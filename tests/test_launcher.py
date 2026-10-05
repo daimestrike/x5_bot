@@ -141,3 +141,34 @@ def test_update_requires_installed_bot(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "ROOT", empty)
     with pytest.raises(SystemExit, match="каталога установленного бота"):
         updater.main([str(archive), "--skip-deps"])
+
+
+def test_update_ignores_macos_junk(tmp_path, monkeypatch):
+    """Архив, перепакованный на Mac, содержит ._файлы и .DS_Store — в установку они не попадают."""
+    root = install(tmp_path)
+    archive = build_archive(tmp_path, extra_content={"._cards.yaml": "мусор", ".DS_Store": "мусор"})
+    run_update(monkeypatch, root, archive)
+    assert not (root / "content" / "._cards.yaml").exists()
+    assert not (root / "content" / ".DS_Store").exists()
+    assert (root / "content" / "cards.yaml").read_text(encoding="utf-8") == "правка владельца\n"
+
+
+def test_rollback_restores_previous_vendor(tmp_path, monkeypatch):
+    """Новая версия не прошла проверку — откат возвращает и код, и прежние зависимости vendor/."""
+    root = install(tmp_path)
+    (root / "vendor").mkdir()
+    (root / "vendor" / "OLD").write_text("старые зависимости", encoding="utf-8")
+    archive = build_archive(tmp_path)
+    staging = tmp_path / "staging" / "rooms-bot-9.9.9"
+    (staging / "vendor").mkdir()
+    (staging / "vendor" / "NEW").write_text("новые", encoding="utf-8")
+    import tarfile
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(staging, arcname="rooms-bot-9.9.9")
+    monkeypatch.setattr(updater, "ROOT", root)
+    monkeypatch.setattr(updater.subprocess, "run",
+                        lambda *a, **k: updater.subprocess.CompletedProcess(a, 1, "", "не запускается"))
+    with pytest.raises(SystemExit, match="Обновление отменено"):
+        updater.main([str(archive), "--skip-deps"])
+    assert (root / "vendor" / "OLD").exists() and not (root / "vendor" / "NEW").exists()
+    assert "1.0.0" in (root / "app" / "__init__.py").read_text(encoding="utf-8")
