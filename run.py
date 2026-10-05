@@ -52,7 +52,8 @@ def check_ai(app):
         hint = {
             "ai_auth": "ключ не подошёл — проверьте AI_API_KEY",
             "ai_not_found": "адрес или имя модели неверны — AI_URL должен оканчиваться на /v1, AI_MODEL — как в списке моделей",
-            "ai_unreachable": "сервер модели недоступен — адрес, сеть, прокси (AI_USE_SYSTEM_PROXY), сертификат (AI_CA_FILE)",
+            "ai_unreachable": "сервер модели недоступен — адрес, сеть, прокси (AI_USE_SYSTEM_PROXY), сертификат (AI_CA_FILE). "
+                              "Для X5 AI-Run серверу нужен сетевой доступ: группа airun-app-prod-4 в Salt X5",
             "ai_rate_limited": "модель перегружена или исчерпан лимит — повторите позже",
             "ai_truncated": "модель ушла в рассуждения: AI_DISABLE_THINKING=true (по умолчанию) или больше AI_MAX_TOKENS",
         }.get(error.code, "см. текст ошибки")
